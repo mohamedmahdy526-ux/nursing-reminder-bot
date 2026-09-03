@@ -1,18 +1,11 @@
 name: 🏥 Nursing Reminder Bot
 
 on:
-  # جدولة يومية: 08:00 إلى 22:00 بتوقيت القاهرة (UTC+2/+3)
-  # Cairo = UTC+2 (شتوي) أو UTC+3 (صيفي)
-  # 08:00 Cairo = 06:00 UTC (شتوي) أو 05:00 UTC (صيفي)
-  # هنستخدم UTC مباشرة: 06:00 → 20:00 (15 مرة، كل ساعة)
+  # جدولة يومية: بنشغّل كل ساعة (الـ bot بيتحقق من وقت القاهرة قبل الإرسال)
   schedule:
-    # 06:00 UTC = 08:00 Cairo (شتوي)
-    # 05:00 UTC = 08:00 Cairo (صيفي)
-    # عشان نضمن التغطية على مدار السنة، هنشغّل كل ساعة من 05:00 لـ 20:00 UTC
-    # والبوت نفسه هيتحقق من الوقت بتاع القاهرة قبل ما يبعت
-    - cron: '0 5-20 * * *'
+    - cron: '0 * * * *'  # كل ساعة على رأس الساعة
 
-  # تشغيل يدوي (للتجربة أو إرسال Reminder فوري)
+  # تشغيل يدوي (للتجربة)
   workflow_dispatch:
     inputs:
       command:
@@ -29,6 +22,14 @@ on:
 jobs:
   send-reminder:
     runs-on: ubuntu-latest
+    # بنمنع التشغيل المتوازي (concurrency) عشان ما يتبعتش reminder مرتين
+    concurrency:
+      group: nursing-reminder
+      cancel-in-progress: false
+
+    permissions:
+      # لازم يكون عندنا صلاحية الكتابة على الـ repo (للـ sent_topics.json)
+      contents: write
 
     steps:
       - name: 📥 Checkout code
@@ -51,13 +52,24 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL || 'minimax/minimax-m3:free' }}
+          # GitHub API (للحفظ الدائم للمواضيع ومنع التكرار)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
           COMMAND: ${{ github.event.inputs.command || 'auto' }}
         run: |
-          # التحقق من الوقت الحالي في القاهرة قبل الإرسال (لتجنب الإرسال في الساعات غير النشطة)
+          # التحقق من الوقت الحالي في القاهرة
           CAIRO_HOUR=$(TZ='Africa/Cairo' date +%H)
-          echo "🕐 Cairo hour: $CAIRO_HOUR:00"
+          COMMAND_VALUE="${{ github.event.inputs.command || 'auto' }}"
+          echo "🕐 Cairo hour: $CAIRO_HOUR:00 | Command: $COMMAND_VALUE"
 
-          # الساعات النشطة: 08-22
+          # لو manual (now/status/topics/help) → اشتغل على طول
+          if [ "$COMMAND_VALUE" != "auto" ]; then
+            echo "✅ Manual command: $COMMAND_VALUE"
+            python bot.py
+            exit $?
+          fi
+
+          # في الجدولة العادية → اتحقق من الساعات النشطة (08-22)
           if [ "$CAIRO_HOUR" -ge 8 ] && [ "$CAIRO_HOUR" -le 22 ]; then
             echo "✅ Active hour. Running bot..."
             python bot.py

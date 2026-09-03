@@ -10,10 +10,17 @@ import sys
 import json
 import random
 import logging
-import requests
+import base64
 from pathlib import Path
+import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+try:
+    from github import Github  # PyGithub
+    HAS_GITHUB = True
+except ImportError:
+    HAS_GITHUB = False
 
 # ============ Logging ============
 logging.basicConfig(
@@ -30,9 +37,85 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "minimax/minimax-m3:free").strip()
 CAIRO_TZ = ZoneInfo("Africa/Cairo")
 
-# ملف حفظ المواضيع
-HISTORY_FILE = Path("sent_topics.json")
+# ============ Persistence: GitHub Repo API ============
+# عشان نمنع التكرار بين الـ runs المختلفة، بنحفظ التاريخ في ملف داخل الـRepo نفسه
+# باستخدام GitHub Contents API. ده بيشتغل في GitHub Actions و GSM Host.
+
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()  # مثل: mohamedmahdy526-ux/nursing-reminder-bot
+HISTORY_FILE = "sent_topics.json"
 MAX_HISTORY = 50
+
+
+def _gh_headers():
+    return {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "nursing-reminder-bot",
+    }
+
+
+def load_history():
+    """تحميل المواضيع اللي اتبعتت قبل كده من GitHub Repo"""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        # Fallback: local file (يشتغل في GSM Host)
+        local = Path("sent_topics.json")
+        if local.exists():
+            try:
+                return json.loads(local.read_text(encoding="utf-8"))
+            except Exception:
+                return []
+        return []
+
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORY_FILE}"
+        r = requests.get(url, headers=_gh_headers(), timeout=15)
+        if r.status_code == 200:
+            content = r.json()
+            decoded = base64.b64decode(content["content"]).decode("utf-8")
+            return json.loads(decoded)
+        elif r.status_code == 404:
+            return []
+        else:
+            log.warning(f"GitHub API error: {r.status_code}")
+            return []
+    except Exception as e:
+        log.exception("load_history failed")
+        return []
+
+
+def save_history(history):
+    """حفظ المواضيع في GitHub Repo"""
+    history = history[-MAX_HISTORY:]
+    content = json.dumps(history, ensure_ascii=False, indent=2)
+
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        # Fallback: local file (يشتغل في GSM Host)
+        local = Path("sent_topics.json")
+        local.write_text(content, encoding="utf-8")
+        return
+
+    try:
+        # Get current SHA (required for update)
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORY_FILE}"
+        r = requests.get(url, headers=_gh_headers(), timeout=15)
+        sha = r.json().get("sha") if r.status_code == 200 else None
+
+        # Update or create
+        payload = {
+            "message": "🤖 Update sent topics history",
+            "content": base64.b64encode(content.encode("utf-8")).decode("utf-8"),
+        }
+        if sha:
+            payload["sha"] = sha
+
+        r = requests.put(url, headers=_gh_headers(), json=payload, timeout=15)
+        if r.status_code in (200, 201):
+            log.info(f"✅ History saved to GitHub ({len(history)} topics)")
+        else:
+            log.error(f"Save failed: {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        log.exception("save_history failed")
 
 # ============ المواضيع ============
 NURSING_TOPICS = [
