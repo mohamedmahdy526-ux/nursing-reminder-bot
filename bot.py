@@ -252,6 +252,14 @@ PROMPT_TEMPLATE = """أنت ممرض خبير ومحاضر تمريض مصري. 
 الإجابة: [الحرف]
 الشرح: [سطر واحد]
 
+━━━ 🗳️ POLL DATA ━━━
+POLL_QUESTION: [نفس سؤال الـ MCQ]
+POLL_OPTION_A: [الاختيار أ]
+POLL_OPTION_B: [الاختيار ب]
+POLL_OPTION_C: [الاختيار ج]
+POLL_OPTION_D: [الاختيار د]
+POLL_CORRECT: [الحرف الصح: A أو B أو C أو D]
+
 ━━━ 📚 المصدر ━━━
 [WHO / CDC / NANDA / Hockenberry / Kozier & Erb's / Smeltzer - كتاب محدد]
 
@@ -358,6 +366,110 @@ def send_telegram(message):
         return True
 
 
+def parse_poll_data(text):
+    """يستخرج بيانات الـ Poll من النص"""
+    poll_data = {
+        "question": None,
+        "options": [],
+        "correct": None,
+    }
+
+    try:
+        for line in text.split("\n"):
+            line = line.strip()
+            if line.startswith("POLL_QUESTION:"):
+                poll_data["question"] = line.replace("POLL_QUESTION:", "").strip()
+            elif line.startswith("POLL_OPTION_A:"):
+                poll_data["options"].append(line.replace("POLL_OPTION_A:", "").strip())
+            elif line.startswith("POLL_OPTION_B:"):
+                poll_data["options"].append(line.replace("POLL_OPTION_B:", "").strip())
+            elif line.startswith("POLL_OPTION_C:"):
+                poll_data["options"].append(line.replace("POLL_OPTION_C:", "").strip())
+            elif line.startswith("POLL_OPTION_D:"):
+                poll_data["options"].append(line.replace("POLL_OPTION_D:", "").strip())
+            elif line.startswith("POLL_CORRECT:"):
+                poll_data["correct"] = line.replace("POLL_CORRECT:", "").strip().upper()
+    except Exception as e:
+        log.exception("parse_poll_data failed")
+
+    return poll_data
+
+
+def strip_poll_section(text):
+    """يشيل قسم POLL DATA من النص قبل الإرسال"""
+    lines = text.split("\n")
+    cleaned = []
+    skip = False
+    for line in lines:
+        if "━━━ 🗳️ POLL DATA ━━━" in line:
+            skip = True
+            continue
+        if skip and line.strip().startswith("POLL_"):
+            continue
+        if skip and "━━━" in line:
+            skip = False
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
+
+
+def send_telegram_poll(poll_data):
+    """يبعت Poll على تليجرام"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+
+    if not poll_data["question"] or len(poll_data["options"]) < 2:
+        log.warning("Invalid poll data, skipping poll")
+        return False
+
+    # Telegram allows max 10 options, each max 100 chars
+    options = [opt[:100] for opt in poll_data["options"][:10]]
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPoll"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "question": poll_data["question"][:300],  # Telegram max 300 chars
+        "options": options,
+        "is_anonymous": True,
+    }
+
+    # لو عايز نضيف الإجابة الصح بعد إغلاق الـ poll
+    # Telegram polls مفيش فيها "correct answer" API رسمي، بس ممكن نضيف explanation
+    if poll_data["correct"]:
+        payload["explanation"] = f"✅ الإجابة الصح: {poll_data['correct']}"
+        payload["explanation_parse_mode"] = "HTML"
+
+    try:
+        r = requests.post(url, json=payload, timeout=30)
+        if r.status_code == 200:
+            log.info(f"📊 Poll sent: {poll_data['question'][:50]}")
+            return True
+        log.error(f"Poll error: {r.status_code} {r.text[:200]}")
+        return False
+    except Exception as e:
+        log.exception("send_telegram_poll failed")
+        return False
+
+
+def send_reminder_with_poll(full_text):
+    """يبعت Reminder + Poll"""
+    # 1. نستخرج الـ poll data
+    poll_data = parse_poll_data(full_text)
+
+    # 2. نشيل قسم POLL من النص
+    clean_text = strip_poll_section(full_text)
+
+    # 3. نبعت النص النضيف أولاً
+    text_sent = send_telegram(clean_text)
+
+    # 4. نبعت الـ poll (لو فيه)
+    poll_sent = False
+    if poll_data["question"] and len(poll_data["options"]) >= 2:
+        poll_sent = send_telegram_poll(poll_data)
+
+    return text_sent and poll_sent
+
+
 # ============ أوامر ============
 def cmd_status():
     """حالة البوت"""
@@ -415,8 +527,8 @@ def main():
     if command == "now":
         log.info("⚡ Manual /now command")
         reminder = get_nursing_reminder()
-        if send_telegram(reminder):
-            log.info("✅ Reminder sent successfully!")
+        if send_reminder_with_poll(reminder):
+            log.info("✅ Reminder + Poll sent successfully!")
         else:
             log.error("❌ Failed to send reminder")
             sys.exit(1)
@@ -436,8 +548,8 @@ def main():
     else:  # auto (الجدولة العادية)
         log.info("⏰ Scheduled reminder")
         reminder = get_nursing_reminder()
-        if send_telegram(reminder):
-            log.info("✅ Scheduled reminder sent successfully!")
+        if send_reminder_with_poll(reminder):
+            log.info("✅ Scheduled reminder + Poll sent!")
         else:
             log.error("❌ Failed to send scheduled reminder")
             sys.exit(1)
