@@ -475,16 +475,22 @@ def send_telegram_quiz(mcq):
         "question": f"📝 {mcq['question']}"[:300],
         "options": options,
         "is_anonymous": True,
-        "type": "quiz",
     }
 
+    # لو فيه إجابة صح → quiz mode (Telegram يقولك صح/غلط)
+    # لو مفيش → poll mode (مجرد سؤال)
     if correct_option_id is not None:
+        payload["type"] = "quiz"
         payload["correct_option_id"] = correct_option_id
+    else:
+        payload["type"] = "regular"
+        log.warning("No correct answer found, sending as regular poll")
 
     try:
         r = requests.post(url, json=payload, timeout=30)
         if r.status_code == 200:
-            log.info(f"📊 Quiz sent: {mcq['question'][:50]}")
+            poll_type = payload["type"]
+            log.info(f"📊 {poll_type.title()} sent: {mcq['question'][:50]}")
             return True
         log.error(f"Quiz error: {r.status_code} {r.text[:200]}")
         return False
