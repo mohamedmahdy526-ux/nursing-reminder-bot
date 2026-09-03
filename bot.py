@@ -1,25 +1,18 @@
 """
 🏥 Nursing Reminder Bot
-- بوت تليجرام يبعث معلومة تمريضية كل ساعة من 08:00 إلى 22:00 بتوقيت القاهرة
-- /start لتفعيل التذكيرات
-- /stop لإيقافها
-- /now لإرسال Reminder فورًا للتجربة
-- /status لمعرفة حالة البوت
-- يحفظ المواضيع السابقة لمنع التكرار
-- بدون إرسال رسالة تلقائية عند بدء التشغيل
-- Africa/Cairo timezone
-- Telegram Plain Text
-- OpenRouter API
+- Job mode: يشتغل مرة واحدة كل ساعة (08:00 - 22:00 Cairo) عبر GitHub Actions
+- Functions: توليد Reminder، منع التكرار، إرسال Telegram
+- أوامر يدوية: /now /status /topics /help (عبر GitHub Actions workflow_dispatch)
 """
 
 import os
+import sys
 import json
-import time
 import random
 import logging
 import requests
-from datetime import datetime, timedelta
 from pathlib import Path
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 # ============ Logging ============
@@ -30,21 +23,18 @@ logging.basicConfig(
 )
 log = logging.getLogger("nursing-bot")
 
-# ============ إعدادات من Environment Variables ============
+# ============ إعدادات ============
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "minimax/minimax-m3:free").strip()
 CAIRO_TZ = ZoneInfo("Africa/Cairo")
 
-# الساعات اللي البوت هيشتغل فيها بتوقيت القاهرة (08:00 → 22:00)
-ACTIVE_HOURS = list(range(8, 23))  # 8, 9, 10, ..., 22
-
-# ملف حفظ المواضيع اللي اتبعتت (عشان نمنع التكرار)
+# ملف حفظ المواضيع
 HISTORY_FILE = Path("sent_topics.json")
-MAX_HISTORY = 50  # نحفظ آخر 50 موضوع
+MAX_HISTORY = 50
 
-# ============ قائمة المواضيع ============
+# ============ المواضيع ============
 NURSING_TOPICS = [
     "Neonatal Nursing (NICU) - Respiratory Distress Syndrome",
     "Neonatal Nursing (NICU) - Apgar Score",
@@ -91,18 +81,41 @@ NURSING_TOPICS = [
     "Patient Safety - SBAR Communication",
     "Patient Safety - Fall Prevention",
     "Patient Safety - Pressure Ulcer Prevention",
-    "Patient Safety - Identification (2 identifiers)",
+    "Patient Safety - Patient Identification",
     "Communication - Therapeutic Communication",
     "Communication - ISBAR Handover",
-    "Ethics - Patient Confidentiality (HIPAA)",
+    "Ethics - Patient Confidentiality",
     "Ethics - Informed Consent",
     "Fluid & Electrolytes - Hyponatremia",
     "Fluid & Electrolytes - Hyperkalemia",
-    "Fluid & Electrolytes - IV Fluids (Crystalloids vs Colloids)",
+    "Fluid & Electrolytes - IV Fluids Types",
     "Pain - Pain Assessment Scales (NRS, VAS, FLACC)",
     "Pain - Non-pharmacological Management",
     "Vital Signs - Blood Pressure Abnormalities",
     "Vital Signs - Oxygen Saturation & Hypoxia",
+    "Ventilator - Modes (AC, SIMV, PSV)",
+    "Ventilator - Weaning Criteria",
+    "ECG - ST Elevation & MI Recognition",
+    "ECG - Atrial Fibrillation",
+    "ECG - Ventricular Tachycardia",
+    "Diabetes - DKA Management",
+    "Diabetes - Hypoglycemia Treatment",
+    "Stroke - Ischemic vs Hemorrhagic",
+    "Stroke - Thrombolytic Therapy",
+    "Wound - Pressure Injury Stages",
+    "Wound - Surgical Site Infection",
+    "Blood - Transfusion Reactions",
+    "Blood - Type & Crossmatch",
+    "Respiratory - Pneumonia Nursing Care",
+    "Respiratory - Asthma Exacerbation",
+    "Respiratory - COPD Management",
+    "Renal - Acute Kidney Injury",
+    "Renal - Dialysis Basics",
+    "Oncology - Chemotherapy Side Effects",
+    "Oncology - Neutropenic Precautions",
+    "Maternal - Postpartum Hemorrhage",
+    "Maternal - Preeclampsia",
+    "Maternal - Labor Stages",
 ]
 
 # ============ الـ Prompt ============
@@ -160,7 +173,6 @@ def load_history():
 
 def save_history(history):
     """حفظ المواضيع اللي اتبعتت"""
-    # نحتفظ بآخر MAX_HISTORY بس
     history = history[-MAX_HISTORY:]
     HISTORY_FILE.write_text(
         json.dumps(history, ensure_ascii=False, indent=2),
@@ -174,7 +186,6 @@ def pick_topic():
     available = [t for t in NURSING_TOPICS if t not in history]
 
     if not available:
-        # لو خلصت المواضيع، نعيد التاريخ
         log.info("All topics used. Resetting history.")
         save_history([])
         available = NURSING_TOPICS
@@ -189,7 +200,8 @@ def pick_topic():
 def get_nursing_reminder():
     """يجيب Nursing Reminder من OpenRouter"""
     if not OPENROUTER_API_KEY:
-        return "❌ OPENROUTER_API_KEY is missing!"
+        log.error("OPENROUTER_API_KEY is missing!")
+        return None
 
     topic = pick_topic()
     log.info(f"📌 Topic: {topic}")
@@ -244,9 +256,11 @@ def send_telegram(message):
         log.error("Telegram credentials missing!")
         return False
 
+    if message is None:
+        return False
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
-    # Plain text (بدون parse_mode) لتجنب مشاكل HTML
     if len(message) <= 4096:
         try:
             r = requests.post(
@@ -262,7 +276,6 @@ def send_telegram(message):
             log.exception("Telegram send failed")
             return False
     else:
-        # نقسّم على أجزاء
         parts = [message[i:i+4000] for i in range(0, len(message), 4000)]
         for part in parts:
             try:
@@ -277,35 +290,22 @@ def send_telegram(message):
         return True
 
 
-# ============ الأوامر ============
-def cmd_start():
-    return (
-        "👋 أهلاً يا محمد!\n\n"
-        "أنا بوت الـ Nursing Reminder 🏥\n\n"
-        "📋 الأوامر المتاحة:\n"
-        "/now - ابعت Reminder دلوقتي (للتجربة)\n"
-        "/status - حالة البوت\n"
-        "/topics - المواضيع المتاحة\n"
-        "/help - المساعدة\n\n"
-        "⏰ هيوصلك Reminder كل ساعة من 08:00 لـ 22:00 بتوقيت القاهرة."
-    )
-
-
+# ============ أوامر ============
 def cmd_status():
+    """حالة البوت"""
     history = load_history()
     cairo_now = datetime.now(CAIRO_TZ)
-    next_hour = cairo_now.hour + 1
     return (
         f"📊 حالة البوت:\n\n"
-        f"🕐 الوقت الحالي (القاهرة): {cairo_now.strftime('%H:%M')}\n"
+        f"🕐 الوقت الحالي (القاهرة): {cairo_now.strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"🧠 الموديل: {OPENROUTER_MODEL}\n"
         f"📚 مواضيع اتبعتت: {len(history)}/{len(NURSING_TOPICS)}\n"
-        f"⏰ الساعات النشطة: 08:00 - 22:00 بتوقيت القاهرة\n"
-        f"⏭️ الـ Reminder الجاي: {'الساعة ' + str(next_hour) if next_hour in ACTIVE_HOURS else 'بكرة الصبح 08:00'}"
+        f"⏰ الساعات النشطة: 08:00 - 22:00 بتوقيت القاهرة"
     )
 
 
 def cmd_topics():
+    """قائمة المواضيع"""
     return (
         f"📚 المواضيع المتاحة ({len(NURSING_TOPICS)} موضوع):\n\n"
         + "\n".join(f"• {t}" for t in NURSING_TOPICS[:15])
@@ -313,95 +313,25 @@ def cmd_topics():
     )
 
 
-def cmd_now():
-    """إرسال Reminder فوراً"""
-    log.info("⚡ Manual /now triggered")
-    reminder = get_nursing_reminder()
-    success = send_telegram(reminder)
-    if success:
-        return None  # خلاص اتبعت، مفيش رسالة ترد
-    return "❌ فشل إرسال Reminder. شوف الـ logs."
+def cmd_help():
+    """المساعدة"""
+    return (
+        "🏥 Nursing Reminder Bot\n\n"
+        "📋 الأوامر المتاحة:\n"
+        "/now - ابعت Reminder دلوقتي\n"
+        "/status - حالة البوت\n"
+        "/topics - المواضيع المتاحة\n"
+        "/help - المساعدة\n\n"
+        "⏰ هيوصلك Reminder كل ساعة من 08:00 لـ 22:00 بتوقيت القاهرة."
+    )
 
 
-# ============ Telegram Polling ============
-last_update_id = 0
-
-
-def handle_telegram_commands():
-    """يستقبل أوامر من تليجرام"""
-    global last_update_id
-
-    if not TELEGRAM_BOT_TOKEN:
-        return
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
-    try:
-        r = requests.get(
-            url,
-            params={"offset": last_update_id + 1, "timeout": 5},
-            timeout=15,
-        )
-        updates = r.json().get("result", [])
-
-        for update in updates:
-            last_update_id = update["update_id"]
-            msg = update.get("message", {})
-            chat_id = str(msg.get("chat", {}).get("id", ""))
-            text = (msg.get("text") or "").strip()
-
-            # نتأكد إن الرسالة من المستخدم الصحيح
-            if chat_id != TELEGRAM_CHAT_ID:
-                log.warning(f"Unauthorized chat_id: {chat_id}")
-                continue
-
-            log.info(f"📩 Command: {text}")
-
-            if text == "/start":
-                reply = cmd_start()
-            elif text == "/status":
-                reply = cmd_status()
-            elif text == "/topics":
-                reply = cmd_topics()
-            elif text == "/now":
-                cmd_now()
-                continue  # مفيش رد
-            elif text == "/help":
-                reply = cmd_start()
-            else:
-                continue  # مش أمر، نتجاهله
-
-            send_telegram(reply)
-
-    except Exception as e:
-        log.exception("Error in handle_telegram_commands")
-
-
-# ============ Main Loop ============
-def get_next_active_time():
-    """الوقت اللي هيتبعت فيه الـ Reminder الجاي (Africa/Cairo)"""
-    now = datetime.now(CAIRO_TZ)
-    current_hour = now.hour
-    current_minute = now.minute
-    current_second = now.second
-
-    # نشوف أقرب ساعة نشطة جاية
-    for hour in ACTIVE_HOURS:
-        if hour > current_hour or (hour == current_hour and current_minute == 0 and current_second == 0):
-            target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-            if target > now:
-                return target
-
-    # لو مفيش ساعة جاية النهارده، نروح لبكرة الصبح 08:00
-    tomorrow = now + timedelta(days=1)
-    return tomorrow.replace(hour=ACTIVE_HOURS[0], minute=0, second=0, microsecond=0)
-
-
-if __name__ == "__main__":
-    print("=" * 50)
-    print("🏥 Nursing Reminder Bot Started")
-    print(f"📅 {datetime.now(CAIRO_TZ).strftime('%Y-%m-%d %H:%M:%S')} (Cairo)")
-    print(f"🧠 Model: {OPENROUTER_MODEL}")
-    print("=" * 50)
+# ============ Entry Point ============
+def main():
+    """الدالة الرئيسية - بتشتغل مرة واحدة لكل Job"""
+    log.info("=" * 50)
+    log.info(f"🏥 Nursing Reminder Bot - Job started at {datetime.now(CAIRO_TZ).strftime('%Y-%m-%d %H:%M:%S')} Cairo")
+    log.info("=" * 50)
 
     # فحص الـ credentials
     if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, OPENROUTER_API_KEY]):
@@ -409,45 +339,43 @@ if __name__ == "__main__":
         log.error(f"  TELEGRAM_BOT_TOKEN: {'✓' if TELEGRAM_BOT_TOKEN else '✗'}")
         log.error(f"  TELEGRAM_CHAT_ID: {'✓' if TELEGRAM_CHAT_ID else '✗'}")
         log.error(f"  OPENROUTER_API_KEY: {'✓' if OPENROUTER_API_KEY else '✗'}")
-        exit(1)
+        sys.exit(1)
 
-    log.info("⏰ Active hours: 08:00 - 22:00 (Africa/Cairo)")
-    log.info("📋 Commands: /start /now /status /topics /help")
-    log.info("💡 No auto-message on startup. Waiting for next scheduled hour.")
+    # الأمر المطلوب (من الـ workflow input)
+    command = os.getenv("COMMAND", "auto").lower()
 
-    sent_today = set()
+    if command == "now":
+        log.info("⚡ Manual /now command")
+        reminder = get_nursing_reminder()
+        if send_telegram(reminder):
+            log.info("✅ Reminder sent successfully!")
+        else:
+            log.error("❌ Failed to send reminder")
+            sys.exit(1)
 
-    while True:
-        try:
-            cairo_now = datetime.now(CAIRO_TZ)
-            current_hour = cairo_now.hour
-            current_date = cairo_now.date()
+    elif command == "status":
+        log.info("📊 /status command")
+        send_telegram(cmd_status())
 
-            # Reset يومي
-            if sent_today and cairo_now.hour == 0 and cairo_now.minute < 2:
-                sent_today.clear()
+    elif command == "topics":
+        log.info("📚 /topics command")
+        send_telegram(cmd_topics())
 
-            # ابعت Reminder لو الساعة في ACTIVE_HOURS ومتبعتش النهارده
-            if current_hour in ACTIVE_HOURS and current_hour not in sent_today:
-                # ابعت أول دقيقة من كل ساعة نشطة
-                if cairo_now.minute == 0:
-                    log.info(f"⏰ Hour {current_hour:02d}:00 - Sending reminder...")
-                    reminder = get_nursing_reminder()
-                    if send_telegram(reminder):
-                        sent_today.add(current_hour)
-                        log.info(f"✅ Sent for hour {current_hour:02d}")
-                    else:
-                        log.error(f"❌ Failed for hour {current_hour:02d}")
+    elif command == "help":
+        log.info("❓ /help command")
+        send_telegram(cmd_help())
 
-            # نستقبل الأوامر كل 10 ثواني
-            handle_telegram_commands()
+    else:  # auto (الجدولة العادية)
+        log.info("⏰ Scheduled reminder")
+        reminder = get_nursing_reminder()
+        if send_telegram(reminder):
+            log.info("✅ Scheduled reminder sent successfully!")
+        else:
+            log.error("❌ Failed to send scheduled reminder")
+            sys.exit(1)
 
-            # نستنى 10 ثواني
-            time.sleep(10)
+    log.info("👋 Job completed")
 
-        except KeyboardInterrupt:
-            log.info("👋 Bot stopped by user")
-            break
-        except Exception as e:
-            log.exception("Error in main loop")
-            time.sleep(60)
+
+if __name__ == "__main__":
+    main()

@@ -1,15 +1,30 @@
 name: 🏥 Nursing Reminder Bot
 
 on:
-  # كل ساعة على رأس الساعة
+  # جدولة يومية: 08:00 إلى 22:00 بتوقيت القاهرة (UTC+2/+3)
+  # Cairo = UTC+2 (شتوي) أو UTC+3 (صيفي)
+  # 08:00 Cairo = 06:00 UTC (شتوي) أو 05:00 UTC (صيفي)
+  # هنستخدم UTC مباشرة: 06:00 → 20:00 (15 مرة، كل ساعة)
   schedule:
-    - cron: '0 * * * *'
+    # 06:00 UTC = 08:00 Cairo (شتوي)
+    # 05:00 UTC = 08:00 Cairo (صيفي)
+    # عشان نضمن التغطية على مدار السنة، هنشغّل كل ساعة من 05:00 لـ 20:00 UTC
+    # والبوت نفسه هيتحقق من الوقت بتاع القاهرة قبل ما يبعت
+    - cron: '0 5-20 * * *'
 
-  # تقدر تجربه يدوياً من Actions tab
+  # تشغيل يدوي (للتجربة أو إرسال Reminder فوري)
   workflow_dispatch:
-
-  # ما يشتغلش على fork
-  workflow_call:
+    inputs:
+      command:
+        description: 'الأمر المطلوب'
+        required: true
+        default: 'now'
+        type: choice
+        options:
+          - now
+          - status
+          - topics
+          - help
 
 jobs:
   send-reminder:
@@ -30,28 +45,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 🏥 Send Nursing Reminder
+      - name: 🏥 Run Nursing Reminder Bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL || 'minimax/minimax-m3:free' }}
+          COMMAND: ${{ github.event.inputs.command || 'auto' }}
         run: |
-          python -c "
-          import os, sys
-          sys.path.insert(0, '.')
-          from bot import get_nursing_reminder, send_telegram
+          # التحقق من الوقت الحالي في القاهرة قبل الإرسال (لتجنب الإرسال في الساعات غير النشطة)
+          CAIRO_HOUR=$(TZ='Africa/Cairo' date +%H)
+          echo "🕐 Cairo hour: $CAIRO_HOUR:00"
 
-          print('🤖 Generating reminder...')
-          reminder = get_nursing_reminder()
-          print('---REMINDER---')
-          print(reminder)
-          print('---END---')
-
-          if send_telegram(reminder):
-              print('✅ Sent successfully!')
-              sys.exit(0)
-          else:
-              print('❌ Failed to send')
-              sys.exit(1)
-          "
+          # الساعات النشطة: 08-22
+          if [ "$CAIRO_HOUR" -ge 8 ] && [ "$CAIRO_HOUR" -le 22 ]; then
+            echo "✅ Active hour. Running bot..."
+            python bot.py
+          else
+            echo "⏭️ Skipping: outside active hours (08:00-22:00 Cairo)"
+            exit 0
+          fi
