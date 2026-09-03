@@ -1,0 +1,57 @@
+name: 🏥 Nursing Reminder Bot
+
+on:
+  # كل ساعة على رأس الساعة
+  schedule:
+    - cron: '0 * * * *'
+
+  # تقدر تجربه يدوياً من Actions tab
+  workflow_dispatch:
+
+  # ما يشتغلش على fork
+  workflow_call:
+
+jobs:
+  send-reminder:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🏥 Send Nursing Reminder
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL || 'minimax/minimax-m3:free' }}
+        run: |
+          python -c "
+          import os, sys
+          sys.path.insert(0, '.')
+          from bot import get_nursing_reminder, send_telegram
+
+          print('🤖 Generating reminder...')
+          reminder = get_nursing_reminder()
+          print('---REMINDER---')
+          print(reminder)
+          print('---END---')
+
+          if send_telegram(reminder):
+              print('✅ Sent successfully!')
+              sys.exit(0)
+          else:
+              print('❌ Failed to send')
+              sys.exit(1)
+          "
