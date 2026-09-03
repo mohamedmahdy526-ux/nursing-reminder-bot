@@ -1,9 +1,9 @@
 name: 🏥 Nursing Reminder Bot
 
 on:
-  # جدولة يومية: بنشغّل كل ساعة (الـ bot بيتحقق من وقت القاهرة قبل الإرسال)
+  # جدولة كل ساعة - الـ bot بيتحقق من وقت القاهرة قبل الإرسال
   schedule:
-    - cron: '0 * * * *'  # كل ساعة على رأس الساعة
+    - cron: '0 * * * *'
 
   # تشغيل يدوي (للتجربة)
   workflow_dispatch:
@@ -22,13 +22,13 @@ on:
 jobs:
   send-reminder:
     runs-on: ubuntu-latest
-    # بنمنع التشغيل المتوازي (concurrency) عشان ما يتبعتش reminder مرتين
+    # بنمنع التشغيل المتوازي (concurrency)
     concurrency:
       group: nursing-reminder
       cancel-in-progress: false
 
     permissions:
-      # لازم يكون عندنا صلاحية الكتابة على الـ repo (للـ sent_topics.json)
+      # لازم صلاحية الكتابة على الـ repo (للـ sent_topics.json)
       contents: write
 
     steps:
@@ -52,24 +52,23 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL || 'minimax/minimax-m3:free' }}
-          # GitHub API (للحفظ الدائم للمواضيع ومنع التكرار)
+          # GitHub API: نستخدم الـ built-in token (مش محتاج Secret إضافي)
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPO: ${{ github.repository }}
           COMMAND: ${{ github.event.inputs.command || 'auto' }}
         run: |
-          # التحقق من الوقت الحالي في القاهرة
           CAIRO_HOUR=$(TZ='Africa/Cairo' date +%H)
           COMMAND_VALUE="${{ github.event.inputs.command || 'auto' }}"
           echo "🕐 Cairo hour: $CAIRO_HOUR:00 | Command: $COMMAND_VALUE"
 
-          # لو manual (now/status/topics/help) → اشتغل على طول
+          # Manual commands (now/status/topics/help) → اشتغل على طول
           if [ "$COMMAND_VALUE" != "auto" ]; then
             echo "✅ Manual command: $COMMAND_VALUE"
             python bot.py
             exit $?
           fi
 
-          # في الجدولة العادية → اتحقق من الساعات النشطة (08-22)
+          # Auto (scheduled) → اتحقق من الساعات النشطة
           if [ "$CAIRO_HOUR" -ge 8 ] && [ "$CAIRO_HOUR" -le 22 ]; then
             echo "✅ Active hour. Running bot..."
             python bot.py

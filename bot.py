@@ -1,7 +1,7 @@
 """
 🏥 Nursing Reminder Bot
 - Job mode: يشتغل مرة واحدة كل ساعة (08:00 - 22:00 Cairo) عبر GitHub Actions
-- Functions: توليد Reminder، منع التكرار، إرسال Telegram
+- Functions: توليد Reminder، منع التكرار (GitHub API)، إرسال Telegram
 - أوامر يدوية: /now /status /topics /help (عبر GitHub Actions workflow_dispatch)
 """
 
@@ -15,12 +15,6 @@ from pathlib import Path
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
-try:
-    from github import Github  # PyGithub
-    HAS_GITHUB = True
-except ImportError:
-    HAS_GITHUB = False
 
 # ============ Logging ============
 logging.basicConfig(
@@ -37,85 +31,112 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "minimax/minimax-m3:free").strip()
 CAIRO_TZ = ZoneInfo("Africa/Cairo")
 
-# ============ Persistence: GitHub Repo API ============
-# عشان نمنع التكرار بين الـ runs المختلفة، بنحفظ التاريخ في ملف داخل الـRepo نفسه
-# باستخدام GitHub Contents API. ده بيشتغل في GitHub Actions و GSM Host.
-
+# ============ Persistence ============
+# بنستخدم GitHub Contents API كـ persistent storage (عشان مفيش local state في GitHub Actions)
+# fallback للملف المحلي في حالة GSM Host
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
-GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()  # مثل: mohamedmahdy526-ux/nursing-reminder-bot
+GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()
 HISTORY_FILE = "sent_topics.json"
 MAX_HISTORY = 50
 
 
 def _gh_headers():
     return {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "nursing-reminder-bot",
     }
 
 
 def load_history():
-    """تحميل المواضيع اللي اتبعتت قبل كده من GitHub Repo"""
-    if not GITHUB_TOKEN or not GITHUB_REPO:
-        # Fallback: local file (يشتغل في GSM Host)
-        local = Path("sent_topics.json")
-        if local.exists():
-            try:
-                return json.loads(local.read_text(encoding="utf-8"))
-            except Exception:
+    """تحميل المواضيع اللي اتبعتت قبل كده"""
+    # GitHub API mode (للـ GitHub Actions)
+    if GITHUB_TOKEN and GITHUB_REPO:
+        try:
+            url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORY_FILE}"
+            r = requests.get(url, headers=_gh_headers(), timeout=15)
+            if r.status_code == 200:
+                content_b64 = r.json().get("content", "")
+                decoded = base64.b64decode(content_b64).decode("utf-8")
+                history = json.loads(decoded)
+                log.info(f"📥 Loaded {len(history)} topics from GitHub")
+                return history
+            elif r.status_code == 404:
+                log.info("📥 No history file yet (first run)")
                 return []
-        return []
+            else:
+                log.warning(f"GitHub API error: {r.status_code}")
+                return []
+        except Exception as e:
+            log.exception("load_history (GitHub) failed")
+            return []
 
-    try:
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORY_FILE}"
-        r = requests.get(url, headers=_gh_headers(), timeout=15)
-        if r.status_code == 200:
-            content = r.json()
-            decoded = base64.b64decode(content["content"]).decode("utf-8")
-            return json.loads(decoded)
-        elif r.status_code == 404:
+    # Fallback: ملف محلي (للـ GSM Host)
+    local = Path(HISTORY_FILE)
+    if local.exists():
+        try:
+            history = json.loads(local.read_text(encoding="utf-8"))
+            log.info(f"📥 Loaded {len(history)} topics from local file")
+            return history
+        except Exception:
             return []
-        else:
-            log.warning(f"GitHub API error: {r.status_code}")
-            return []
-    except Exception as e:
-        log.exception("load_history failed")
-        return []
+    return []
 
 
 def save_history(history):
-    """حفظ المواضيع في GitHub Repo"""
+    """حفظ المواضيع"""
     history = history[-MAX_HISTORY:]
     content = json.dumps(history, ensure_ascii=False, indent=2)
 
-    if not GITHUB_TOKEN or not GITHUB_REPO:
-        # Fallback: local file (يشتغل في GSM Host)
-        local = Path("sent_topics.json")
-        local.write_text(content, encoding="utf-8")
+    # GitHub API mode
+    if GITHUB_TOKEN and GITHUB_REPO:
+        try:
+            url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORY_FILE}"
+
+            # Get current SHA (required for update)
+            r = requests.get(url, headers=_gh_headers(), timeout=15)
+            sha = r.json().get("sha") if r.status_code == 200 else None
+
+            payload = {
+                "message": "🤖 Update sent topics history",
+                "content": base64.b64encode(content.encode("utf-8")).decode("utf-8"),
+            }
+            if sha:
+                payload["sha"] = sha
+
+            r = requests.put(url, headers=_gh_headers(), json=payload, timeout=15)
+            if r.status_code in (200, 201):
+                log.info(f"💾 History saved to GitHub ({len(history)} topics)")
+            else:
+                log.error(f"Save failed: {r.status_code} {r.text[:200]}")
+        except Exception as e:
+            log.exception("save_history (GitHub) failed")
         return
 
+    # Fallback: ملف محلي
     try:
-        # Get current SHA (required for update)
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORY_FILE}"
-        r = requests.get(url, headers=_gh_headers(), timeout=15)
-        sha = r.json().get("sha") if r.status_code == 200 else None
-
-        # Update or create
-        payload = {
-            "message": "🤖 Update sent topics history",
-            "content": base64.b64encode(content.encode("utf-8")).decode("utf-8"),
-        }
-        if sha:
-            payload["sha"] = sha
-
-        r = requests.put(url, headers=_gh_headers(), json=payload, timeout=15)
-        if r.status_code in (200, 201):
-            log.info(f"✅ History saved to GitHub ({len(history)} topics)")
-        else:
-            log.error(f"Save failed: {r.status_code} {r.text[:200]}")
+        Path(HISTORY_FILE).write_text(content, encoding="utf-8")
+        log.info(f"💾 History saved locally ({len(history)} topics)")
     except Exception as e:
-        log.exception("save_history failed")
+        log.exception("save_history (local) failed")
+
+
+def pick_topic():
+    """اختيار موضوع لم يتبعت من قبل"""
+    history = load_history()
+    available = [t for t in NURSING_TOPICS if t not in history]
+
+    if not available:
+        log.info("🔄 All topics used. Resetting history.")
+        save_history([])
+        available = NURSING_TOPICS
+
+    chosen = random.choice(available)
+    history.append(chosen)
+    save_history(history)
+    return chosen
+
 
 # ============ المواضيع ============
 NURSING_TOPICS = [
@@ -241,42 +262,6 @@ PROMPT_TEMPLATE = """أنت ممرض خبير ومحاضر تمريض مصري. 
 - ما تخترعش معلومات
 - لو مش متأكد، اكتب "غير متأكد من المصدر" في الأخير
 """
-
-
-# ============ دوال مساعدة ============
-def load_history():
-    """تحميل المواضيع اللي اتبعتت قبل كده"""
-    if HISTORY_FILE.exists():
-        try:
-            return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            return []
-    return []
-
-
-def save_history(history):
-    """حفظ المواضيع اللي اتبعتت"""
-    history = history[-MAX_HISTORY:]
-    HISTORY_FILE.write_text(
-        json.dumps(history, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
-def pick_topic():
-    """اختيار موضوع لم يتبعت من قبل"""
-    history = load_history()
-    available = [t for t in NURSING_TOPICS if t not in history]
-
-    if not available:
-        log.info("All topics used. Resetting history.")
-        save_history([])
-        available = NURSING_TOPICS
-
-    chosen = random.choice(available)
-    history.append(chosen)
-    save_history(history)
-    return chosen
 
 
 # ============ OpenRouter API ============
