@@ -11,6 +11,7 @@
 
 import os
 import sys
+import re
 import json
 import base64
 import time
@@ -214,6 +215,17 @@ FACT_PROMPT_TEMPLATE = """أنت ممرض خبير ومحاضر تمريض مص�
 ━━━ 🧠 طريقة الحفظ ━━━
 [Mnemonic أو طريقة سهلة للحفظ]
 
+━━━ 📝 MCQ ━━━
+السؤال: [سؤال سريري تطبيقي يختبر فهم النقطة الأساسية]
+أ) [الخيار الأول]
+ب) [الخيار الثاني]
+ج) [الخيار الثالث]
+د) [الخيار الرابع]
+
+━━━ ✅ الإجابة ━━━
+الإجابة: [حرف واحد فقط: أ أو ب أو ج أو د]
+الشرح: [سطر واحد مختصر يشرح سبب صحة الإجابة]
+
 ━━━ 📚 المصدر ━━━
 [WHO / CDC / NANDA / Hockenberry / Kozier & Erb's / Smeltzer - كتاب محدد]
 
@@ -326,8 +338,8 @@ def pick_topic(department_key):
     return chosen, department["name"]
 
 
-def call_gemini(messages, max_tokens=1200, temperature=0.7):
-    """استدعاء Google Gemini API كبديل فائق السرعة ومجاني"""
+def call_gemini(messages, max_tokens=2500, temperature=0.7):
+    """استدعاء Google Gemini API كبديل فائق السرعة ومجاني مع ضبط استهلاك الـ Tokens"""
     if not GEMINI_API_KEY:
         return None, "GEMINI_API_KEY missing"
     try:
@@ -343,22 +355,36 @@ def call_gemini(messages, max_tokens=1200, temperature=0.7):
             elif role == "assistant":
                 contents.append({"role": "model", "parts": [{"text": content}]})
 
-        gemini_models = ["gemini-3.6-flash", "gemini-2.5-flash-lite", "gemini-3.5-flash"]
+        gemini_models = ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash"]
         for g_model in gemini_models:
             log.info(f"🌟 Trying Gemini model: {g_model}...")
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{g_model}:generateContent?key={GEMINI_API_KEY}"
             payload = {
                 "contents": contents,
-                "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature},
+                "generationConfig": {
+                    "maxOutputTokens": max(max_tokens, 2500),
+                    "temperature": temperature,
+                    "thinkingConfig": {"thinkingBudget": 0},
+                },
             }
             if system_instruction:
                 payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
 
             r = requests.post(url, json=payload, timeout=40)
             if r.status_code == 200:
-                text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                log.info(f"✅ Gemini model {g_model} succeeded!")
-                return text, None
+                res_data = r.json()
+                candidates = res_data.get("candidates", [])
+                if candidates:
+                    first_cand = candidates[0]
+                    finish_reason = first_cand.get("finishReason")
+                    if finish_reason == "MAX_TOKENS":
+                        log.warning(f"⚠️ Gemini {g_model} output was truncated (MAX_TOKENS). Trying next model...")
+                        continue
+                    parts = first_cand.get("content", {}).get("parts", [])
+                    if parts and "text" in parts[0]:
+                        text = parts[0]["text"]
+                        log.info(f"✅ Gemini model {g_model} succeeded!")
+                        return text, None
             else:
                 log.warning(f"⚠️ Gemini {g_model} returned {r.status_code}: {r.text[:120]}. Trying next Gemini model...")
 
@@ -505,14 +531,97 @@ def send_chat_action(chat_id, action="typing"):
         pass
 
 
-def send_telegram(chat_id, text, parse_mode="HTML"):
-    """إرسال رسالة تليجرام مع تقسيم آمن ومعالجة أخطاء HTML"""
+def get_main_keyboard():
+    """لوحة الأزرار السريعة الدائمة أسفل المحادثة"""
+    return {
+        "keyboard": [
+            [{"text": "🏥 معلومة جديدة + كويز"}, {"text": "📝 كويز تدريبي"}],
+            [{"text": "🩺 تخصصات التمريض (الأقسام)"}, {"text": "📌 القسم الحالي"}],
+            [{"text": "🔄 محادثة جديدة"}, {"text": "📊 حالة البوت"}],
+        ],
+        "resize_keyboard": True,
+        "is_persistent": True,
+    }
+
+
+DEPT_ARABIC_NAMES = {
+    "1": "👶 حديثي الولادة (NICU)",
+    "2": "🫀 العناية المركزة (ICU)",
+    "3": "🧸 تمريض الأطفال",
+    "4": "💊 علم الأدوية (Pharma)",
+    "5": "📖 المصطلحات الطبية",
+    "6": "🛡️ سلامة المرضى & ISBAR",
+    "7": "📈 رسم القلب (ECG)",
+    "8": "🚨 الطوارئ والحوادث (ER)",
+}
+
+
+def get_departments_inline_keyboard():
+    """أزرار تفاعلية مضمنة داخل الشات لاختيار التخصص بضغطة واحدة"""
+    keyboard = []
+    keys = list(DEPARTMENTS.keys())
+    for i in range(0, len(keys), 2):
+        row = []
+        for k in keys[i:i+2]:
+            label = DEPT_ARABIC_NAMES.get(k, DEPARTMENTS[k]["name"])
+            row.append({
+                "text": label,
+                "callback_data": f"dept_{k}"
+            })
+        keyboard.append(row)
+    return {"inline_keyboard": keyboard}
+
+
+def answer_callback_query(callback_query_id, text=None):
+    """إشعار تليجرام باستلام الضغطة على الزر التفاعلي"""
+    if not TELEGRAM_BOT_TOKEN or not callback_query_id:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
+    try:
+        payload = {"callback_query_id": callback_query_id}
+        if text:
+            payload["text"] = text
+        requests.post(url, json=payload, timeout=5)
+    except Exception:
+        pass
+
+
+def setup_bot_commands():
+    """تسجيل الأوامر في زر القائمة الرسمي في تليجرام (Menu Button [/])"""
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setMyCommands"
+    commands = [
+        {"command": "fact", "description": "🏥 معلومة سريرية + كويز تفاعلي"},
+        {"command": "mcq", "description": "📝 سؤال تدريبي تفاعلي"},
+        {"command": "departments", "description": "🩺 تخصصات التمريض الـ 8"},
+        {"command": "current", "description": "📌 معرفة القسم المختار حالياً"},
+        {"command": "reset", "description": "🔄 تصفير النقاش وبدء محادثة جديدة"},
+        {"command": "status", "description": "📊 حالة واتصال البوت"},
+        {"command": "help", "description": "❓ شرح الأوامر والمساعدة"},
+    ]
+    try:
+        r = requests.post(url, json={"commands": commands}, timeout=10)
+        if r.status_code == 200:
+            log.info("✅ Telegram Bot Commands Menu configured successfully!")
+        else:
+            log.warning(f"⚠️ Failed to set bot commands ({r.status_code}): {r.text[:100]}")
+
+        # تفعيل زر القائمة بجوار خانة الكتابة
+        btn_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setChatMenuButton"
+        requests.post(btn_url, json={"menu_button": {"type": "commands"}}, timeout=5)
+    except Exception as e:
+        log.warning(f"Error setting bot commands: {e}")
+
+
+def send_telegram(chat_id, text, parse_mode="HTML", reply_markup=None):
+    """إرسال رسالة تليجرام مع تقسيم آمن ومعالجة أخطاء HTML ودعم الأزرار (reply_markup)"""
     if not TELEGRAM_BOT_TOKEN or not text:
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
-    def _post_chunk(chunk, mode):
+    def _post_chunk(chunk, mode, markup=None):
         payload = {
             "chat_id": chat_id,
             "text": chunk,
@@ -520,6 +629,8 @@ def send_telegram(chat_id, text, parse_mode="HTML"):
         }
         if mode:
             payload["parse_mode"] = mode
+        if markup:
+            payload["reply_markup"] = json.dumps(markup)
         return requests.post(url, data=payload, timeout=30)
 
     # تقسيم ذكي لتجنب قطع الأسطر
@@ -542,12 +653,14 @@ def send_telegram(chat_id, text, parse_mode="HTML"):
             chunks.append("\n".join(current_chunk))
 
     success = True
-    for chunk in chunks:
+    total_chunks = len(chunks)
+    for idx, chunk in enumerate(chunks):
+        markup = reply_markup if (idx == total_chunks - 1) else None
         try:
-            r = _post_chunk(chunk, parse_mode)
+            r = _post_chunk(chunk, parse_mode, markup)
             if r.status_code != 200:
                 log.warning(f"Telegram parse_mode={parse_mode} failed ({r.status_code}): {r.text[:120]}. Retrying as plain text...")
-                r_fallback = _post_chunk(chunk, "")
+                r_fallback = _post_chunk(chunk, "", markup)
                 if r_fallback.status_code != 200:
                     log.error(f"Telegram plain fallback failed: {r_fallback.text[:150]}")
                     success = False
@@ -558,8 +671,15 @@ def send_telegram(chat_id, text, parse_mode="HTML"):
     return success
 
 
+def clean_md(text):
+    """إزالة علامات الماركداون لتسهيل المطابقة النصية المرنة"""
+    if not text:
+        return ""
+    return re.sub(r"[*_#`]", "", text).strip()
+
+
 def parse_mcq_from_text(text):
-    """استخراج سؤال MCQ وخياراته وإجابته الصحيحة والشرح"""
+    """استخراج سؤال MCQ وخياراته وإجابته الصحيحة والشرح بمرونة عالية مع مختلف النماذج"""
     mcq = {
         "question": None,
         "options": [],
@@ -569,80 +689,152 @@ def parse_mcq_from_text(text):
     if not text:
         return mcq
 
-    try:
-        in_mcq = False
-        in_answer = False
-        letter_map = {
-            "أ": "A", "ا": "A", "إ": "A", "آ": "A",
-            "ب": "B",
-            "ج": "C",
-            "د": "D",
-            "A": "A", "B": "B", "C": "C", "D": "D",
-        }
+    letter_map = {
+        "أ": "A", "ا": "A", "إ": "A", "آ": "A", "1": "A", "A": "A", "a": "A",
+        "ب": "B", "2": "B", "B": "B", "b": "B",
+        "ج": "C", "3": "C", "C": "C", "c": "C",
+        "د": "D", "4": "D", "D": "D", "d": "D",
+    }
 
-        for line in text.split("\n"):
-            line_stripped = line.strip()
-            if not line_stripped:
-                continue
+    in_mcq = False
+    in_answer = False
 
-            if "MCQ" in line_stripped and "━━" in line_stripped:
-                in_mcq = True
-                in_answer = False
-                continue
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        cleaned = clean_md(line)
+        if not cleaned:
+            continue
 
-            if "الإجابة" in line_stripped and "━━" in line_stripped:
-                in_mcq = False
-                in_answer = True
-                continue
+        # فحص بداية قسم MCQ
+        if ("MCQ" in cleaned.upper() or "سؤال" in cleaned or "كويز" in cleaned) and (
+            "━" in cleaned or "---" in cleaned or "###" in cleaned or "MCQ" in cleaned.upper()
+        ):
+            in_mcq = True
+            in_answer = False
+            continue
 
-            if in_mcq and ("━━━" in line_stripped or "━━" in line_stripped):
-                in_mcq = False
+        # فحص قسم الإجابة
+        if any(w in cleaned for w in ["الإجابة", "الاجابة", "الجواب", "Answer"]) and any(
+            sep in cleaned for sep in ["━", "---", "###", "✅", "✔", "CHECK"]
+        ):
+            in_mcq = False
+            in_answer = True
+            continue
 
-            if in_mcq and line_stripped.startswith("السؤال:"):
-                mcq["question"] = line_stripped.replace("السؤال:", "").strip()
-                continue
+        # نهاية قسم MCQ / الإجابة لو دخلنا في قسم جديد (مثل المصدر)
+        if (in_mcq or in_answer) and any(
+            h in cleaned for h in ["المصدر", "معلومة", "ملاحظة", "Source", "Reference"]
+        ) and ("━" in cleaned or "###" in cleaned or "---" in cleaned):
+            in_mcq = False
+            in_answer = False
+            continue
 
-            # استخراج الاختيارات
-            if in_mcq:
-                clean_line = line_stripped.lstrip("([{-")
-                if len(clean_line) >= 2:
-                    first_char = clean_line[0]
-                    second_char = clean_line[1]
-                    if first_char in letter_map and second_char in ")].- :":
-                        letter = letter_map[first_char]
-                        option_text = clean_line[2:].strip().lstrip(")-. :")
-                        mcq["options"].append((letter, option_text))
-                        continue
+        # استخراج السؤال
+        if in_mcq and not mcq["question"]:
+            for q_prefix in ["السؤال:", "سؤال:", "السؤال", "س:", "Question:"]:
+                if cleaned.startswith(q_prefix):
+                    q_text = cleaned[len(q_prefix):].strip()
+                    if q_text:
+                        mcq["question"] = q_text
+                    break
+            else:
+                if not re.match(r"^[(]?([أاإآبجدABCDabcd1-4])[)\].:\-–]", cleaned):
+                    if len(cleaned) > 10 and not cleaned.startswith("━"):
+                        mcq["question"] = cleaned
 
-            # استخراج الإجابة والشرح
-            if in_answer:
-                if line_stripped.startswith("الإجابة:"):
-                    ans_text = line_stripped.replace("الإجابة:", "").strip().upper()
-                    for ch in ans_text:
-                        if ch in letter_map:
-                            mcq["correct_letter"] = letter_map[ch]
-                            break
-                elif line_stripped.startswith("الشرح:"):
-                    mcq["explanation"] = line_stripped.replace("الشرح:", "").strip()
+        # استخراج الاختيارات
+        if in_mcq:
+            opt_match = re.match(r"^[(]?([أاإآبجدABCDabcd1-4])[)\].:\-–\s]+\s*(.+)$", cleaned)
+            if opt_match:
+                raw_let = opt_match.group(1)
+                opt_text = opt_match.group(2).strip()
+                norm_let = letter_map.get(raw_let)
+                if norm_let and opt_text:
+                    if not any(let == norm_let for let, _ in mcq["options"]):
+                        mcq["options"].append((norm_let, opt_text))
+            continue
 
-    except Exception as e:
-        log.exception("parse_mcq_from_text failed")
+        # استخراج الإجابة والشرح
+        if in_answer or (in_mcq and any(ans_kw in cleaned for ans_kw in ["الإجابة:", "الاجابة:", "الجواب:", "Answer:"])):
+            if any(ans_kw in cleaned for ans_kw in ["الإجابة:", "الاجابة:", "الجواب:", "الإجابة الصحيحة:", "الاجابة الصحيحة:", "Answer:"]):
+                ans_text = cleaned.split(":", 1)[1].strip()
+                for ch in ans_text:
+                    if ch in letter_map:
+                        mcq["correct_letter"] = letter_map[ch]
+                        break
+            elif any(exp_kw in cleaned for exp_kw in ["الشرح:", "شرح:", "السبب:", "Explanation:"]):
+                mcq["explanation"] = cleaned.split(":", 1)[1].strip()
 
     return mcq
+
+
+def strip_mcq_section(text):
+    """فصل وتجريد قسم الـ MCQ والإجابة من نص المعلومة لإرسالهما منفصلين"""
+    if not text:
+        return ""
+    lines = text.split("\n")
+    cleaned = []
+    skip = False
+
+    for line in lines:
+        line_stripped = line.strip()
+        c = clean_md(line_stripped)
+
+        # بداية قسم MCQ
+        if ("MCQ" in c.upper() or "سؤال" in c or "كويز" in c) and (
+            "━" in c or "---" in c or "###" in c or "MCQ" in c.upper()
+        ):
+            skip = True
+            continue
+
+        # نهاية التخطي لو دخلنا في قسم جديد مثل المصدر
+        if skip and any(h in c for h in ["المصدر", "معلومة", "ملاحظة", "Source", "Reference"]) and (
+            "━" in c or "###" in c or "---" in c
+        ):
+            skip = False
+            cleaned.append(line)
+            continue
+
+        if skip:
+            continue
+
+        cleaned.append(line)
+
+    return "\n".join(cleaned).strip()
 
 
 def send_telegram_quiz(chat_id, mcq):
     """إرسال سؤال MCQ كـ Native Quiz Poll تفاعلي في تليجرام"""
     if not TELEGRAM_BOT_TOKEN:
+        log.error("Telegram bot token is missing!")
         return False
 
     if not mcq.get("question") or len(mcq.get("options", [])) < 2:
+        log.warning(f"Invalid MCQ data, skipping quiz: question={mcq.get('question')}, options_count={len(mcq.get('options', []))}")
         return False
 
-    options = [text[:100] for _, text in mcq["options"][:10]]
+    # تصفية الخيارات لتكون مميزة وغير مكررة (Telegram API يرفض التكرار)
+    seen_texts = set()
+    unique_options = []
+    option_letters = []
+
+    for letter, opt_text in mcq["options"]:
+        clean_opt = opt_text.strip()[:100]
+        if clean_opt and clean_opt not in seen_texts:
+            seen_texts.add(clean_opt)
+            unique_options.append(clean_opt)
+            option_letters.append(letter)
+
+    if len(unique_options) < 2:
+        log.warning("Less than 2 distinct options for quiz poll")
+        return False
+
+    unique_options = unique_options[:10]
+    option_letters = option_letters[:10]
+
     correct_option_id = None
     if mcq.get("correct_letter"):
-        for idx, (letter, _) in enumerate(mcq["options"]):
+        for idx, letter in enumerate(option_letters):
             if letter == mcq["correct_letter"]:
                 correct_option_id = idx
                 break
@@ -651,7 +843,7 @@ def send_telegram_quiz(chat_id, mcq):
     payload = {
         "chat_id": chat_id,
         "question": f"📝 {mcq['question']}"[:300],
-        "options": options,
+        "options": unique_options,
         "is_anonymous": True,
     }
 
@@ -662,10 +854,15 @@ def send_telegram_quiz(chat_id, mcq):
             payload["explanation"] = mcq["explanation"][:200]
     else:
         payload["type"] = "regular"
+        log.warning("No correct answer found, sending as regular poll")
 
     try:
         r = requests.post(url, json=payload, timeout=30)
-        return r.status_code == 200
+        if r.status_code == 200:
+            log.info(f"📊 Quiz Poll ({payload['type']}) sent to {chat_id}: {mcq['question'][:50]}")
+            return True
+        log.error(f"Quiz error ({r.status_code}): {r.text[:200]}")
+        return False
     except Exception as e:
         log.exception("send_telegram_quiz failed")
         return False
@@ -724,38 +921,46 @@ def discuss_topic(chat_id, user_message):
 
 
 # ============ Telegram Command Handlers ============
-def cmd_thakka(chat_id):
-    """عرض قائمة الأقسام المتاحة"""
+def cmd_start(chat_id):
+    """رسالة الترحيب الأولى وتفعيل أزرار القائمة"""
     state = load_state()
     user_state = state.get(str(chat_id), {})
     current_dept = user_state.get("department")
+    current_name = DEPARTMENTS[current_dept]["name"] if current_dept in DEPARTMENTS else "لم يحدد بعد (عشوائي)"
+
+    welcome_msg = (
+        "👋 <b>أهلاً بك في بوت التمريض التفاعلي والسريري!</b> 🩺\n\n"
+        "أنا هنا لمساعدتك في المذاكرة والممارسة التمريضية العملية بأقوى المعلومات والأسئلة التفاعلية.\n\n"
+        f"📌 <b>تخصصك المختار حالياً:</b> <b>{current_name}</b>\n\n"
+        "💡 <b>كيف تستخدم البوت؟</b>\n"
+        "• اختر تخصصك التمريضي من الأزرار بالأسفل 👇\n"
+        "• أو اضغط <b>[🏥 معلومة جديدة + كويز]</b> في القائمة بالأسفل\n"
+        "• وفي أي وقت، تقدر تسأل أو ترد على أي معلومة وندردش سوا!"
+    )
+    send_telegram(chat_id, welcome_msg, reply_markup=get_departments_inline_keyboard())
+    send_telegram(chat_id, "✨ تم تفعيل لوحة الأزرار السريعة بالأسفل لراحتك 👇", reply_markup=get_main_keyboard())
+
+
+def cmd_thakka(chat_id):
+    """عرض قائمة الأقسام المتاحة مع أزرار تفاعلية مضمنة"""
+    state = load_state()
+    user_state = state.get(str(chat_id), {})
+    current_dept = user_state.get("department")
+    current_name = DEPARTMENTS[current_dept]["name"] if current_dept in DEPARTMENTS else "لم يحدد بعد (عشوائي)"
 
     msg = (
-        "📚 <b>ثقف نفسك — الأقسام التمريضية</b>\n\n"
-        "اختار القسم اللي تحب تذاكر منه:\n\n"
+        "🩺 <b>الأقسام والتخصصات التمريضية الـ 8:</b>\n\n"
+        f"📌 <b>القسم المختار حالياً:</b> <b>{current_name}</b>\n\n"
+        "اضغط على أي تخصص بالأسفل لاختياره بلمسة واحدة: 👇"
     )
-
-    for key, dept in DEPARTMENTS.items():
-        emoji = "👉 ✅" if current_dept == key else "▫️"
-        msg += f"{emoji} <b>{key}</b> - {dept['name']}\n"
-
-    msg += (
-        "\n📋 <b>الأوامر السريعة:</b>\n"
-        "• /اختار [رقم] — لاختيار القسم (مثال: <code>/اختار 2</code> للعناية المركزة)\n"
-        "• /معلومة — معلومة سريرية مع شرح كامل\n"
-        "• /mcq — سؤال تفاعلي Native Quiz\n"
-        "• /جديد — بدء محادثة جديدة وتصفير النقاش السابق\n"
-        "• /قسم — معرفة القسم المختار حالياً\n\n"
-        "💬 <b>ميزة النقاش:</b> في أي وقت، اكتب استفسارك أو رد على أي معلومة وهتناقش معاك فوراً!"
-    )
-    send_telegram(chat_id, msg)
+    send_telegram(chat_id, msg, reply_markup=get_departments_inline_keyboard())
 
 
 def cmd_choose(chat_id, dept_key):
     """اختيار قسم محدد"""
     dept_key = dept_key.strip()
     if dept_key not in DEPARTMENTS:
-        send_telegram(chat_id, f"❌ رقم القسم غير صحيح. برجاء اختيار رقم من 1 إلى {len(DEPARTMENTS)}.")
+        send_telegram(chat_id, f"❌ رقم القسم غير صحيح. برجاء اختيار رقم من 1 إلى {len(DEPARTMENTS)}.", reply_markup=get_main_keyboard())
         return
 
     state = load_state()
@@ -767,16 +972,17 @@ def cmd_choose(chat_id, dept_key):
     dept = DEPARTMENTS[dept_key]
     send_telegram(
         chat_id,
-        f"✅ ممتاز! اخترت قسم: <b>{dept['name']}</b>\n\n"
+        f"✅ ممتاز! تم اختيار قسم: <b>{dept['name']}</b> بنجاح.\n\n"
         f"دلوقتي تقدر تبعت:\n"
-        f"• /معلومة — لجلب معلومة سريرية مشروحة بالمصري\n"
-        f"• /mcq — لسؤال تدريبي تفاعلي\n"
-        f"• أو اطرح أي سؤال مباشرة في الشات وسأرد عليك!"
+        f"• 🏥 <b>معلومة جديدة + كويز</b> من الأزرار بالأسفل\n"
+        f"• 📝 <b>كويز تدريبي</b>\n"
+        f"• أو اطرح أي سؤال سريري في الشات وسأرد عليك فوراً!",
+        reply_markup=get_main_keyboard()
     )
 
 
 def cmd_fact(chat_id):
-    """إرسال معلومة تمريضية وحفظها في السياق للنقاش"""
+    """إرسال معلومة تمريضية متبوعة بسؤال Quiz Poll تفاعلي وحفظها في السياق للنقاش"""
     state = load_state()
     user_info = state.get(str(chat_id), {})
     dept_key = user_info.get("department")
@@ -793,7 +999,7 @@ def cmd_fact(chat_id):
         send_telegram(chat_id, "❌ خطأ في اختيار الموضوع.")
         return
 
-    send_telegram(chat_id, f"⏳ جاري تحضير معلومة تمريضية عن <b>{topic}</b>...")
+    send_telegram(chat_id, f"⏳ جاري تحضير معلومة وكويز تفاعلي عن <b>{topic}</b>...")
     send_chat_action(chat_id, "typing")
 
     content = get_content(topic, department)
@@ -809,7 +1015,14 @@ def cmd_fact(chat_id):
     user_info["dialogue_history"] = []
     save_state(state)
 
-    formatted = format_for_telegram(content)
+    # 1. استخراج الـ MCQ من النص
+    mcq = parse_mcq_from_text(content)
+
+    # 2. تجريد قسم الكويز من نص الرسالة حتى لا تحترق الإجابة
+    clean_text = strip_mcq_section(content)
+
+    # 3. تنسيق النص وإضافة فوتر النقاش
+    formatted = format_for_telegram(clean_text)
     footer = (
         "\n\n━━━━━━━━━━━━━━━━━━━━\n"
         "💬 <b>حابب تفهم نقطة معينة أو تسأل عن حالة شفتها في المستشفى؟</b>\n"
@@ -817,6 +1030,13 @@ def cmd_fact(chat_id):
     )
     formatted += footer
     send_telegram(chat_id, formatted)
+
+    # 4. إرسال سؤال الـ Quiz Poll التفاعلي فوراً بعد المعلومة
+    if mcq.get("question") and len(mcq.get("options", [])) >= 2:
+        time.sleep(1)
+        send_telegram_quiz(chat_id, mcq)
+    else:
+        log.warning(f"No valid MCQ found in content for topic '{topic}'. Skipped poll.")
 
 
 def cmd_mcq(chat_id):
@@ -878,10 +1098,8 @@ def cmd_reset(chat_id):
     send_telegram(
         chat_id,
         "🔄 <b>تم تصفير المحادثة وسياق النقاش السابق بنجاح!</b>\n\n"
-        "تقدر دلوقتي:\n"
-        "• تطلب معلومة جديدة بـ /معلومة\n"
-        "• تختار قسم بـ /ثقف\n"
-        "• أو تسألني أي سؤال تمريضي يخطر في بالك مباشرة!"
+        "تقدر دلوقتي تطلب معلومة جديدة أو تختار تخصصاً من القائمة بالأسفل 👇",
+        reply_markup=get_main_keyboard(),
     )
 
 
@@ -892,7 +1110,7 @@ def cmd_current(chat_id):
     dept_key = user_state.get("department")
 
     if not dept_key:
-        send_telegram(chat_id, "❌ لم تختر قسماً بعد. ابعت /ثقف لاختيار قسم.")
+        send_telegram(chat_id, "❌ لم تختر قسماً بعد. اضغط [🩺 تخصصات التمريض (الأقسام)] بالأسفل لاختيار تخصص.", reply_markup=get_main_keyboard())
         return
 
     dept = DEPARTMENTS[dept_key]
@@ -900,26 +1118,24 @@ def cmd_current(chat_id):
     msg = f"📂 القسم المختار حالياً: <b>{dept['name']}</b>"
     if last_topic:
         msg += f"\n📌 آخر موضوع تمت مناقشته: <i>{last_topic}</i>"
-    send_telegram(chat_id, msg)
+    send_telegram(chat_id, msg, reply_markup=get_main_keyboard())
 
 
 def cmd_help(chat_id):
     """رسالة المساعدة"""
     msg = (
-        "🏥 <b>Nursing Interactive & Discussion Bot</b>\n\n"
-        "<b>📋 الأوامر المتاحة:</b>\n"
-        "• /ثقف — عرض واختيار الأقسام التمريضية الـ 8\n"
-        "• /اختار [رقم] — تحديد تخصصك المفضل\n"
-        "• /معلومة (أو /now) — جلب معلومة سريرية مع شرح كامل بالمصري\n"
-        "• /mcq — سؤال تفاعلي Native Quiz تضغط على الإجابة وتعرف نتيجتك\n"
-        "• /جديد (أو /reset) — تصفير الذاكرة وبدء موضوع جديد\n"
-        "• /قسم — معرفة قسمك وموضوعك الحالي\n"
-        "• /status — حالة اتصال البوت والموديل\n"
-        "• /مساعدة — عرض هذه التعليمات\n\n"
+        "🏥 <b>دليل واستخدام بوت التمريض التفاعلي:</b>\n\n"
+        "📋 <b>القائمة والأزرار السريعة بالأسفل:</b>\n"
+        "• <b>[🏥 معلومة جديدة + كويز]</b>: جلب معلومة سريرية مشروحة بالمصري متبوعة بسؤال كويز تفاعلي.\n"
+        "• <b>[📝 كويز تدريبي]</b>: سؤال MCQ تفاعلي Native Quiz تضغط على الإجابة وتعرف نتيجتك فوراً.\n"
+        "• <b>[🩺 تخصصات التمريض]</b>: عرض الأقسام الـ 8 واختيار التخصص بلمسة واحدة.\n"
+        "• <b>[📌 القسم الحالي]</b>: إظهار التخصص الطبي المختار حالياً.\n"
+        "• <b>[🔄 محادثة جديدة]</b>: تصفير الذاكرة وبدء استفسار تمريضي جديد.\n"
+        "• <b>[📊 حالة البوت]</b>: فحص حالة الموديل والاتصال.\n\n"
         "💬 <b>طريقة المناقشة التفاعلية:</b>\n"
-        "مش محتاج تضغط أوامر عشان تسأل! بعد ما تجيلك أي معلومة، اكتب أي استفسار في الشات (مثال: <i>'طب لو الضغط واطي أعمل إيه؟'</i> أو <i>'ليه المريض ده بياخد لازيكس؟'</i>) وهرد عليك فوراً!"
+        "مش محتاج تضغط أوامر عشان تسأل! بعد ما تجيلك أي معلومة، اكتب أي استفسار في الشات (مثال: <i>'طب لو الضغط واطي أعمل إيه؟'</i>) وهرد عليك فوراً!"
     )
-    send_telegram(chat_id, msg)
+    send_telegram(chat_id, msg, reply_markup=get_main_keyboard())
 
 
 def cmd_status(chat_id):
@@ -932,7 +1148,8 @@ def cmd_status(chat_id):
         f"🕐 توقيت القاهرة: {cairo_now.strftime('%Y-%m-%d %H:%M:%S')}\n"
         f"🧠 الموديل المستخدم: <code>{OPENROUTER_MODEL}</code>\n"
         f"📚 إجمالي المواضيع المسجلة في السجل: {len(history)}\n"
-        f"⚡ وضع التشغيل: خادم تفاعلي 24/7 مع دعم النقاش المباشر"
+        f"⚡ وضع التشغيل: خادم تفاعلي 24/7 مع دعم النقاش المباشر والأزرار التفاعلية",
+        reply_markup=get_main_keyboard(),
     )
 
 
@@ -947,7 +1164,7 @@ last_update_id = 0
 
 
 def handle_updates():
-    """استقبال ومعالجة رسائل وأوامر تليجرام"""
+    """استقبال ومعالجة رسائل وأوامر ونقرات أزرار تليجرام"""
     global last_update_id
 
     if not TELEGRAM_BOT_TOKEN:
@@ -957,7 +1174,7 @@ def handle_updates():
     try:
         r = requests.get(
             url,
-            params={"offset": last_update_id + 1, "timeout": 25, "allowed_updates": ["message"]},
+            params={"offset": last_update_id + 1, "timeout": 25, "allowed_updates": ["message", "callback_query"]},
             timeout=30,
         )
         if r.status_code != 200:
@@ -967,6 +1184,24 @@ def handle_updates():
         updates = r.json().get("result", [])
         for update in updates:
             last_update_id = update["update_id"]
+
+            # 1. معالجة نقرات الأزرار التفاعلية (Inline Keyboard Callback)
+            cb = update.get("callback_query")
+            if cb:
+                cb_id = cb.get("id")
+                cb_chat_id = str(cb.get("message", {}).get("chat", {}).get("id", ""))
+                cb_data = cb.get("data", "")
+
+                if TELEGRAM_CHAT_ID and cb_chat_id != TELEGRAM_CHAT_ID:
+                    continue
+
+                if cb_data.startswith("dept_"):
+                    dept_key = cb_data.replace("dept_", "")
+                    answer_callback_query(cb_id, text="تم حفظ اختيار التخصص بنجاح ✅")
+                    cmd_choose(cb_chat_id, dept_key)
+                continue
+
+            # 2. معالجة الرسائل وأزرار الكيبورد
             msg = update.get("message", {})
             chat_id = str(msg.get("chat", {}).get("id", ""))
             text = (msg.get("text") or "").strip()
@@ -981,27 +1216,27 @@ def handle_updates():
                 log.warning(f"Unauthorized chat_id: {chat_id}")
                 continue
 
-            # معالجة الأوامر
-            parts = text.split(maxsplit=1)
-            command = parts[0].lower()
-            arg = parts[1] if len(parts) > 1 else ""
-
-            if command in ("/ثقف", "/thakka", "/start"):
-                cmd_thakka(chat_id)
-            elif command in ("/اختار", "/choose"):
-                cmd_choose(chat_id, arg)
-            elif command in ("/معلومة", "/fact", "/now"):
+            clean_text = text.lower()
+            if text == "🏥 معلومة جديدة + كويز" or clean_text in ("/معلومة", "/fact", "/now", "معلومة"):
                 cmd_fact(chat_id)
-            elif command in ("/mcq", "/quiz"):
+            elif text == "📝 كويز تدريبي" or clean_text in ("/mcq", "/quiz", "كويز"):
                 cmd_mcq(chat_id)
-            elif command in ("/جديد", "/reset", "/clear"):
-                cmd_reset(chat_id)
-            elif command in ("/قسم", "/current"):
+            elif text == "🩺 تخصصات التمريض (الأقسام)" or clean_text in ("/ثقف", "/thakka", "/departments", "أقسام"):
+                cmd_thakka(chat_id)
+            elif text == "📌 القسم الحالي" or clean_text in ("/قسم", "/current"):
                 cmd_current(chat_id)
-            elif command in ("/مساعدة", "/help"):
-                cmd_help(chat_id)
-            elif command in ("/status",):
+            elif text == "🔄 محادثة جديدة" or clean_text in ("/جديد", "/reset", "/clear"):
+                cmd_reset(chat_id)
+            elif text == "📊 حالة البوت" or clean_text in ("/status", "status"):
                 cmd_status(chat_id)
+            elif clean_text in ("/مساعدة", "/help", "مساعدة"):
+                cmd_help(chat_id)
+            elif clean_text.startswith("/start"):
+                cmd_start(chat_id)
+            elif clean_text.startswith("/اختار") or clean_text.startswith("/choose"):
+                parts = text.split(maxsplit=1)
+                arg = parts[1] if len(parts) > 1 else ""
+                cmd_choose(chat_id, arg)
             else:
                 # أي رسالة نصية عادية تدخل فوراً في محرك النقاش!
                 discuss_topic(chat_id, text)
@@ -1023,6 +1258,9 @@ if __name__ == "__main__":
         log.error("❌ Missing required credentials (TELEGRAM_BOT_TOKEN or OPENROUTER_API_KEY)!")
         sys.exit(1)
 
+    # تهيئة زر القائمة الرسمي في تليجرام
+    setup_bot_commands()
+
     # التخلص من التراكمات القديمة على السيرفر عند بدء التشغيل
     try:
         init_resp = requests.get(
@@ -1037,7 +1275,7 @@ if __name__ == "__main__":
         pass
 
     log.info("👂 Listening for Telegram messages & discussions...")
-    log.info("📋 Commands: /ثقف /اختار /معلومة /mcq /جديد /قسم /مساعدة")
+    log.info("📋 Touch Menu & Commands: /start /معلومة /mcq /ثقف /قسم /جديد /status /help")
 
     last_reminded_hour = datetime.now(CAIRO_TZ).hour
 

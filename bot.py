@@ -7,6 +7,8 @@
 
 import os
 import sys
+import re
+import time
 import json
 import random
 import logging
@@ -469,100 +471,131 @@ def format_for_telegram(text):
     return result.strip()
 
 
+def clean_md(text):
+    """إزالة علامات الماركداون لتسهيل المطابقة النصية المرنة"""
+    if not text:
+        return ""
+    return re.sub(r"[*_#`]", "", text).strip()
+
+
 def parse_mcq_from_text(text):
-    """يستخرج سؤال MCQ من النص العادي"""
+    """يستخرج سؤال MCQ وخياراته وإجابته والشرح بمرونة عالية مع مختلف الموديلات"""
     mcq = {
         "question": None,
         "options": [],  # list of tuples (letter, text)
         "correct_letter": None,
+        "explanation": None,
+    }
+    if not text:
+        return mcq
+
+    letter_map = {
+        "أ": "A", "ا": "A", "إ": "A", "آ": "A", "1": "A", "A": "A", "a": "A",
+        "ب": "B", "2": "B", "B": "B", "b": "B",
+        "ج": "C", "3": "C", "C": "C", "c": "C",
+        "د": "D", "4": "D", "D": "D", "d": "D",
     }
 
-    try:
-        in_mcq = False
-        in_answer = False
+    in_mcq = False
+    in_answer = False
 
-        for line in text.split("\n"):
-            line_stripped = line.strip()
-            if not line_stripped:
-                continue
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        cleaned = clean_md(line)
+        if not cleaned:
+            continue
 
-            # تحديد قسم MCQ
-            if "━━━ 📝 MCQ ━━━" in line_stripped or "━━ 📝 MCQ ━━━" in line_stripped:
-                in_mcq = True
-                in_answer = False
-                continue
+        # تحديد بداية قسم MCQ
+        if ("MCQ" in cleaned.upper() or "سؤال" in cleaned or "كويز" in cleaned) and (
+            "━" in cleaned or "---" in cleaned or "###" in cleaned or "MCQ" in cleaned.upper()
+        ):
+            in_mcq = True
+            in_answer = False
+            continue
 
-            # نهاية قسم MCQ
-            if in_mcq and ("━━━" in line_stripped and "MCQ" not in line_stripped):
-                in_mcq = False
+        # تحديد قسم الإجابة
+        if any(w in cleaned for w in ["الإجابة", "الاجابة", "الجواب", "Answer"]) and any(
+            sep in cleaned for sep in ["━", "---", "###", "✅", "✔", "CHECK"]
+        ):
+            in_mcq = False
+            in_answer = True
+            continue
 
-            # استخراج السؤال
-            if in_mcq and line_stripped.startswith("السؤال:"):
-                mcq["question"] = line_stripped.replace("السؤال:", "").strip()
-                continue
+        # نهاية قسم MCQ / الإجابة لو دخلنا في قسم جديد (مثل المصدر)
+        if (in_mcq or in_answer) and any(
+            h in cleaned for h in ["المصدر", "معلومة", "ملاحظة", "Source", "Reference"]
+        ) and ("━" in cleaned or "###" in cleaned or "---" in cleaned):
+            in_mcq = False
+            in_answer = False
+            continue
 
-            # استخراج الاختيارات
-            if in_mcq:
-                clean_line = line_stripped.lstrip("([{-")
-                if len(clean_line) >= 2:
-                    first_char = clean_line[0]
-                    second_char = clean_line[1]
-                    letter_map = {
-                        "أ": "A", "ا": "A", "إ": "A", "آ": "A",
-                        "ب": "B",
-                        "ج": "C",
-                        "د": "D",
-                        "A": "A", "B": "B", "C": "C", "D": "D",
-                    }
-                    if first_char in letter_map and second_char in ")].- :":
-                        letter = letter_map[first_char]
-                        option_text = clean_line[2:].strip().lstrip(")-. :")
-                        mcq["options"].append((letter, option_text))
-                        continue
+        # استخراج السؤال
+        if in_mcq and not mcq["question"]:
+            for q_prefix in ["السؤال:", "سؤال:", "السؤال", "س:", "Question:"]:
+                if cleaned.startswith(q_prefix):
+                    q_text = cleaned[len(q_prefix):].strip()
+                    if q_text:
+                        mcq["question"] = q_text
+                    break
+            else:
+                if not re.match(r"^[(]?([أاإآبجدABCDabcd1-4])[)\].:\-–]", cleaned):
+                    if len(cleaned) > 10 and not cleaned.startswith("━"):
+                        mcq["question"] = cleaned
 
-            # استخراج الإجابة
-            if line_stripped.startswith("الإجابة:"):
-                answer_text = line_stripped.replace("الإجابة:", "").strip().upper()
-                letter_map = {
-                    "أ": "A", "ا": "A", "إ": "A", "آ": "A",
-                    "ب": "B",
-                    "ج": "C",
-                    "د": "D",
-                    "A": "A", "B": "B", "C": "C", "D": "D",
-                }
-                for ch in answer_text:
+        # استخراج الاختيارات
+        if in_mcq:
+            opt_match = re.match(r"^[(]?([أاإآبجدABCDabcd1-4])[)\].:\-–\s]+\s*(.+)$", cleaned)
+            if opt_match:
+                raw_let = opt_match.group(1)
+                opt_text = opt_match.group(2).strip()
+                norm_let = letter_map.get(raw_let)
+                if norm_let and opt_text:
+                    if not any(let == norm_let for let, _ in mcq["options"]):
+                        mcq["options"].append((norm_let, opt_text))
+            continue
+
+        # استخراج الإجابة والشرح
+        if in_answer or (in_mcq and any(ans_kw in cleaned for ans_kw in ["الإجابة:", "الاجابة:", "الجواب:", "Answer:"])):
+            if any(ans_kw in cleaned for ans_kw in ["الإجابة:", "الاجابة:", "الجواب:", "الإجابة الصحيحة:", "الاجابة الصحيحة:", "Answer:"]):
+                ans_text = cleaned.split(":", 1)[1].strip()
+                for ch in ans_text:
                     if ch in letter_map:
                         mcq["correct_letter"] = letter_map[ch]
                         break
-                continue
-
-    except Exception as e:
-        log.exception("parse_mcq_from_text failed")
+            elif any(exp_kw in cleaned for exp_kw in ["الشرح:", "شرح:", "السبب:", "Explanation:"]):
+                mcq["explanation"] = cleaned.split(":", 1)[1].strip()
 
     return mcq
 
 
 def strip_mcq_section(text):
     """يشيل قسم MCQ و الإجابة من النص (عشان نبعتهم منفصلين)"""
+    if not text:
+        return ""
     lines = text.split("\n")
     cleaned = []
     skip = False
-    in_answer = False
 
     for line in lines:
         line_stripped = line.strip()
+        c = clean_md(line_stripped)
 
         # ابدأ التخطي من MCQ
-        if "━━━ 📝 MCQ ━━━" in line_stripped or "━━ 📝 MCQ ━━━" in line_stripped:
+        if ("MCQ" in c.upper() or "سؤال" in c or "كويز" in c) and (
+            "━" in c or "---" in c or "###" in c or "MCQ" in c.upper()
+        ):
             skip = True
             continue
 
-        # لو داخل skip، تخطي كل حاجة
+        # نهاية التخطي لو دخلنا في قسم جديد (المصدر)
+        if skip and any(h in c for h in ["المصدر", "معلومة", "ملاحظة", "Source", "Reference"]) and (
+            "━" in c or "###" in c or "---" in c
+        ):
+            skip = False
+            cleaned.append(line)
+            continue
+
         if skip:
-            # لكن ممكن نرجع لو دخلنا في section تاني (المصدر)
-            if "━━━ 📚 المصدر ━━━" in line_stripped or "━━ 📚 المصدر ━━━" in line_stripped:
-                skip = False
-                cleaned.append(line)
             continue
 
         cleaned.append(line)
@@ -575,17 +608,33 @@ def send_telegram_quiz(mcq):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
 
-    if not mcq["question"] or len(mcq["options"]) < 2:
-        log.warning("Invalid MCQ data, skipping quiz")
+    if not mcq.get("question") or len(mcq.get("options", [])) < 2:
+        log.warning(f"Invalid MCQ data, skipping quiz: question={mcq.get('question')}, options={len(mcq.get('options', []))}")
         return False
 
-    # نحول الاختيارات لـ list of strings
-    options = [text[:100] for _, text in mcq["options"][:10]]
+    # تصفية الخيارات لتكون مميزة وغير مكررة
+    seen_texts = set()
+    unique_options = []
+    option_letters = []
+
+    for letter, opt_text in mcq["options"]:
+        clean_opt = opt_text.strip()[:100]
+        if clean_opt and clean_opt not in seen_texts:
+            seen_texts.add(clean_opt)
+            unique_options.append(clean_opt)
+            option_letters.append(letter)
+
+    if len(unique_options) < 2:
+        log.warning("Less than 2 distinct options for quiz poll")
+        return False
+
+    unique_options = unique_options[:10]
+    option_letters = option_letters[:10]
 
     # نحسب index الإجابة الصح
     correct_option_id = None
-    if mcq["correct_letter"]:
-        for idx, (letter, _) in enumerate(mcq["options"]):
+    if mcq.get("correct_letter"):
+        for idx, letter in enumerate(option_letters):
             if letter == mcq["correct_letter"]:
                 correct_option_id = idx
                 break
@@ -594,7 +643,7 @@ def send_telegram_quiz(mcq):
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "question": f"📝 {mcq['question']}"[:300],
-        "options": options,
+        "options": unique_options,
         "is_anonymous": True,
     }
 
@@ -603,6 +652,8 @@ def send_telegram_quiz(mcq):
     if correct_option_id is not None:
         payload["type"] = "quiz"
         payload["correct_option_id"] = correct_option_id
+        if mcq.get("explanation"):
+            payload["explanation"] = mcq["explanation"][:200]
     else:
         payload["type"] = "regular"
         log.warning("No correct answer found, sending as regular poll")
@@ -613,7 +664,7 @@ def send_telegram_quiz(mcq):
             poll_type = payload["type"]
             log.info(f"📊 {poll_type.title()} sent: {mcq['question'][:50]}")
             return True
-        log.error(f"Quiz error: {r.status_code} {r.text[:200]}")
+        log.error(f"Quiz error ({r.status_code}): {r.text[:200]}")
         return False
     except Exception as e:
         log.exception("send_telegram_quiz failed")
@@ -636,8 +687,11 @@ def send_reminder_with_quiz(full_text):
 
     # 5. نبعت الـ Quiz (لو فيه)
     quiz_sent = False
-    if mcq["question"] and len(mcq["options"]) >= 2:
+    if mcq.get("question") and len(mcq.get("options", [])) >= 2:
+        time.sleep(1)
         quiz_sent = send_telegram_quiz(mcq)
+    else:
+        log.warning("No valid MCQ found to send quiz poll")
 
     if not text_sent:
         return False
@@ -680,12 +734,36 @@ def cmd_help():
     )
 
 
+def setup_bot_commands():
+    """تسجيل الأوامر في زر القائمة الرسمي في تليجرام (Menu Button [/])"""
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setMyCommands"
+    commands = [
+        {"command": "now", "description": "⚡ إرسال تذكير تمريضي + كويز الآن"},
+        {"command": "status", "description": "📊 فحص حالة البوت والموديل"},
+        {"command": "topics", "description": "📚 قائمة المواضيع التمريضية"},
+        {"command": "help", "description": "❓ شرح الأوامر والمساعدة"},
+    ]
+    try:
+        r = requests.post(url, json={"commands": commands}, timeout=10)
+        if r.status_code == 200:
+            log.info("✅ Telegram Menu Commands registered!")
+        btn_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setChatMenuButton"
+        requests.post(btn_url, json={"menu_button": {"type": "commands"}}, timeout=5)
+    except Exception:
+        pass
+
+
 # ============ Entry Point ============
 def main():
     """الدالة الرئيسية - بتشتغل مرة واحدة لكل Job"""
     log.info("=" * 50)
     log.info(f"🏥 Nursing Reminder Bot - Job started at {datetime.now(CAIRO_TZ).strftime('%Y-%m-%d %H:%M:%S')} Cairo")
     log.info("=" * 50)
+
+    # تهيئة قائمة الأوامر في زر تليجرام
+    setup_bot_commands()
 
     # فحص الـ credentials
     if not all([TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, OPENROUTER_API_KEY]):
