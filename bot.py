@@ -230,16 +230,16 @@ PROMPT_TEMPLATE = """أنت ممرض خبير ومحاضر تمريض مصري. 
 ⚠️ اكتب بالظبط بالشكل ده (سطر لكل section):
 
 ━━━ 🏥 معلومة ━━━
-[جملة أو جملتين بالمصري العامي، أسلوب مباشر زي "بص، الموضوع كذا..." أو "خد بالك من..."]
+[3-4 أسطر بالمصري العامي، أسلوب مباشر زي "بص، الموضوع كذا..." أو "خد بالك من...". فسّر الموضوع بشكل كافي عشان القارئ يفهمه بدون ما يدور على مصدر خارجي]
 
 ━━━ ❓ ليه مهمة ━━━
-[الأهمية السريرية في سطر أو سطرين]
+[الأهمية السريرية في 2-3 أسطر. ليه الـ nurse لازم يعرف ده؟ إيه العواقب لو ما اتعملش؟]
 
 ━━━ 🔗 Clinical Connection ━━━
-[اربطها بحالة عملية أو إجراء تمريضي في سطر]
+[2-3 أسطر. اربطها بحالة عملية واقعية أو إجراء تمريضي محدد (الخطوات بالأرقام)]
 
 ━━━ 🧠 طريقة الحفظ ━━━
-[Mnemonic أو طريقة سهلة للحفظ]
+[Mnemonic أو طريقة سهلة للحفظ بالأحرف الأولى]
 
 ━━━ 📝 MCQ ━━━
 السؤال: [السؤال]
@@ -329,11 +329,17 @@ def send_telegram(message):
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
+    # نستخدم HTML formatting للـ Bold والإيموجي
     if len(message) <= 4096:
         try:
             r = requests.post(
                 url,
-                data={"chat_id": TELEGRAM_CHAT_ID, "text": message},
+                data={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": message,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
                 timeout=30,
             )
             if r.status_code == 200:
@@ -349,13 +355,64 @@ def send_telegram(message):
             try:
                 requests.post(
                     url,
-                    data={"chat_id": TELEGRAM_CHAT_ID, "text": part},
+                    data={
+                        "chat_id": TELEGRAM_CHAT_ID,
+                        "text": part,
+                        "parse_mode": "HTML",
+                    },
                     timeout=30,
                 )
             except Exception as e:
                 log.exception("Telegram part send failed")
                 return False
         return True
+
+
+def escape_html(text):
+    """يهرب من حروف HTML الخاصة"""
+    return (text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;"))
+
+
+def format_for_telegram(text):
+    """يحوّل النص لصيغة HTML جميلة لتليجرام
+
+    - يحول العناوين (━━━ xxx ━━━) لـ Bold
+    - يحافظ على باقي النص عادي
+    - يدعم emojis ✅
+    """
+    if not text:
+        return ""
+
+    lines = text.split("\n")
+    formatted = []
+
+    for line in lines:
+        line_stripped = line.strip()
+
+        # لو السطر عنوان (فيه ━━━)
+        if "━━━" in line_stripped and len(line_stripped) < 100:
+            # نشيل الـ ━━━ و نحطه bold
+            # مثال: ━━━ 🏥 معلومة ━━━ → <b>🏥 معلومة</b>
+            title = line_stripped.replace("━━━", "").strip()
+            if title:
+                formatted.append(f"<b>{escape_html(title)}</b>")
+                formatted.append("")  # سطر فاضي بعد العنوان
+            else:
+                formatted.append("")
+            continue
+
+        formatted.append(escape_html(line))
+
+    result = "\n".join(formatted)
+
+    # نشيل الأسطر الفاضية المتكررة
+    while "\n\n\n" in result:
+        result = result.replace("\n\n\n", "\n\n")
+
+    return result.strip()
 
 
 def parse_mcq_from_text(text):
@@ -517,16 +574,19 @@ def send_telegram_quiz(mcq):
 
 def send_reminder_with_quiz(full_text):
     """يبعت Reminder + Quiz Poll"""
-    # 1. نستخرج الـ MCQ
+    # 1. نستخرج الـ MCQ (قبل التنسيق عشان parser يشتغل على النص الأصلي)
     mcq = parse_mcq_from_text(full_text)
 
     # 2. نشيل قسم MCQ من النص
     clean_text = strip_mcq_section(full_text)
 
-    # 3. نبعت النص (بدون MCQ) أولاً
-    text_sent = send_telegram(clean_text)
+    # 3. نحول النص لـ HTML (Bold للعناوين + emojis)
+    formatted_text = format_for_telegram(clean_text)
 
-    # 4. نبعت الـ Quiz (لو فيه)
+    # 4. نبعت النص (بدون MCQ) أولاً
+    text_sent = send_telegram(formatted_text)
+
+    # 5. نبعت الـ Quiz (لو فيه)
     quiz_sent = False
     if mcq["question"] and len(mcq["options"]) >= 2:
         quiz_sent = send_telegram_quiz(mcq)
