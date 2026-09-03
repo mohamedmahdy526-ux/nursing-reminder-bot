@@ -249,7 +249,7 @@ PROMPT_TEMPLATE = """أنت ممرض خبير ومحاضر تمريض مصري. 
 د) [اختيار 4]
 
 ━━━ ✅ الإجابة ━━━
-الإجابة: [الحرف]
+الإجابة: [حرف واحد فقط: أ أو ب أو ج أو د]
 الشرح: [سطر واحد]
 
 ━━━ 📚 المصدر ━━━
@@ -410,9 +410,25 @@ def parse_mcq_from_text(text):
 
             # استخراج الإجابة
             if line_stripped.startswith("الإجابة:"):
-                answer = line_stripped.replace("الإجابة:", "").strip().upper()
-                # خد أول حرف بس
-                mcq["correct_letter"] = answer[0] if answer else None
+                answer_text = line_stripped.replace("الإجابة:", "").strip()
+                # نمسك أول حرف عربي أو إنجليزي
+                # ممكن يكون: "ب" أو "B" أو "(ب)" أو "ب -" أو "الخيار ب"
+                answer_text_upper = answer_text.upper()
+                
+                # البحث عن أول حرف من الحروف
+                for ch in answer_text_upper:
+                    if ch in "ABCDأبجد":
+                        if ch == "أ":
+                            mcq["correct_letter"] = "A"
+                        elif ch == "ب":
+                            mcq["correct_letter"] = "B"
+                        elif ch == "ج":
+                            mcq["correct_letter"] = "C"
+                        elif ch == "د":
+                            mcq["correct_letter"] = "D"
+                        else:
+                            mcq["correct_letter"] = ch
+                        break
                 continue
 
     except Exception as e:
