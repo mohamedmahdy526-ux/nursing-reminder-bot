@@ -2,5 +2,6 @@
   "ECG - ST Elevation & MI Recognition",
   "Vital Signs - Blood Pressure Abnormalities",
   "Surgical - Drain Management",
-  "IV Therapy - IV Flow Rate Calculation"
+  "IV Therapy - IV Flow Rate Calculation",
+  "Pharmacology - Insulin Types & Onset"
 ]
