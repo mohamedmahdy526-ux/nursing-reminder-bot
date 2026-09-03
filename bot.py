@@ -252,14 +252,6 @@ PROMPT_TEMPLATE = """أنت ممرض خبير ومحاضر تمريض مصري. 
 الإجابة: [الحرف]
 الشرح: [سطر واحد]
 
-━━━ 🗳️ POLL DATA ━━━
-POLL_QUESTION: [نفس سؤال الـ MCQ]
-POLL_OPTION_A: [الاختيار أ]
-POLL_OPTION_B: [الاختيار ب]
-POLL_OPTION_C: [الاختيار ج]
-POLL_OPTION_D: [الاختيار د]
-POLL_CORRECT: [الحرف الصح: A أو B أو C أو D]
-
 ━━━ 📚 المصدر ━━━
 [WHO / CDC / NANDA / Hockenberry / Kozier & Erb's / Smeltzer - كتاب محدد]
 
@@ -366,108 +358,160 @@ def send_telegram(message):
         return True
 
 
-def parse_poll_data(text):
-    """يستخرج بيانات الـ Poll من النص"""
-    poll_data = {
+def parse_mcq_from_text(text):
+    """يستخرج سؤال MCQ من النص العادي"""
+    mcq = {
         "question": None,
-        "options": [],
-        "correct": None,
+        "options": [],  # list of tuples (letter, text)
+        "correct_letter": None,
     }
 
     try:
+        in_mcq = False
+        in_answer = False
+
         for line in text.split("\n"):
-            line = line.strip()
-            if line.startswith("POLL_QUESTION:"):
-                poll_data["question"] = line.replace("POLL_QUESTION:", "").strip()
-            elif line.startswith("POLL_OPTION_A:"):
-                poll_data["options"].append(line.replace("POLL_OPTION_A:", "").strip())
-            elif line.startswith("POLL_OPTION_B:"):
-                poll_data["options"].append(line.replace("POLL_OPTION_B:", "").strip())
-            elif line.startswith("POLL_OPTION_C:"):
-                poll_data["options"].append(line.replace("POLL_OPTION_C:", "").strip())
-            elif line.startswith("POLL_OPTION_D:"):
-                poll_data["options"].append(line.replace("POLL_OPTION_D:", "").strip())
-            elif line.startswith("POLL_CORRECT:"):
-                poll_data["correct"] = line.replace("POLL_CORRECT:", "").strip().upper()
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+
+            # تحديد قسم MCQ
+            if "━━━ 📝 MCQ ━━━" in line_stripped or "━━ 📝 MCQ ━━━" in line_stripped:
+                in_mcq = True
+                in_answer = False
+                continue
+
+            # نهاية قسم MCQ
+            if in_mcq and ("━━━" in line_stripped and "MCQ" not in line_stripped):
+                in_mcq = False
+
+            # استخراج السؤال
+            if in_mcq and line_stripped.startswith("السؤال:"):
+                mcq["question"] = line_stripped.replace("السؤال:", "").strip()
+                continue
+
+            # استخراج الاختيارات
+            if in_mcq and len(line_stripped) >= 2:
+                # أ) أو أ- أو أ.
+                if line_stripped[0] in "أابججد" and line_stripped[1] in ")].-":
+                    letter = line_stripped[0]
+                    # أ/ب/ج/د -> A/B/C/D
+                    if letter == "أ":
+                        letter = "A"
+                    elif letter == "ب":
+                        letter = "B"
+                    elif letter == "ج":
+                        letter = "C"
+                    elif letter == "د":
+                        letter = "D"
+                    option_text = line_stripped[2:].strip()
+                    mcq["options"].append((letter, option_text))
+                    continue
+
+            # استخراج الإجابة
+            if line_stripped.startswith("الإجابة:"):
+                answer = line_stripped.replace("الإجابة:", "").strip().upper()
+                # خد أول حرف بس
+                mcq["correct_letter"] = answer[0] if answer else None
+                continue
+
     except Exception as e:
-        log.exception("parse_poll_data failed")
+        log.exception("parse_mcq_from_text failed")
 
-    return poll_data
+    return mcq
 
 
-def strip_poll_section(text):
-    """يشيل قسم POLL DATA من النص قبل الإرسال"""
+def strip_mcq_section(text):
+    """يشيل قسم MCQ و الإجابة من النص (عشان نبعتهم منفصلين)"""
     lines = text.split("\n")
     cleaned = []
     skip = False
+    in_answer = False
+
     for line in lines:
-        if "━━━ 🗳️ POLL DATA ━━━" in line:
+        line_stripped = line.strip()
+
+        # ابدأ التخطي من MCQ
+        if "━━━ 📝 MCQ ━━━" in line_stripped or "━━ 📝 MCQ ━━━" in line_stripped:
             skip = True
             continue
-        if skip and line.strip().startswith("POLL_"):
+
+        # لو داخل skip، تخطي كل حاجة
+        if skip:
+            # لكن ممكن نرجع لو دخلنا في section تاني (المصدر)
+            if "━━━ 📚 المصدر ━━━" in line_stripped or "━━ 📚 المصدر ━━━" in line_stripped:
+                skip = False
+                cleaned.append(line)
             continue
-        if skip and "━━━" in line:
-            skip = False
-            continue
+
         cleaned.append(line)
+
     return "\n".join(cleaned).strip()
 
 
-def send_telegram_poll(poll_data):
-    """يبعت Poll على تليجرام"""
+def send_telegram_quiz(mcq):
+    """يبعت Quiz Poll على تليجرام"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return False
 
-    if not poll_data["question"] or len(poll_data["options"]) < 2:
-        log.warning("Invalid poll data, skipping poll")
+    if not mcq["question"] or len(mcq["options"]) < 2:
+        log.warning("Invalid MCQ data, skipping quiz")
         return False
 
-    # Telegram allows max 10 options, each max 100 chars
-    options = [opt[:100] for opt in poll_data["options"][:10]]
+    # نحول الاختيارات لـ list of strings
+    options = [text[:100] for _, text in mcq["options"][:10]]
+
+    # نحسب index الإجابة الصح
+    correct_option_id = None
+    if mcq["correct_letter"]:
+        for idx, (letter, _) in enumerate(mcq["options"]):
+            if letter == mcq["correct_letter"]:
+                correct_option_id = idx
+                break
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPoll"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "question": poll_data["question"][:300],  # Telegram max 300 chars
+        "question": f"📝 {mcq['question']}"[:300],
         "options": options,
         "is_anonymous": True,
+        "type": "quiz",
     }
 
-    # لو عايز نضيف الإجابة الصح بعد إغلاق الـ poll
-    # Telegram polls مفيش فيها "correct answer" API رسمي، بس ممكن نضيف explanation
-    if poll_data["correct"]:
-        payload["explanation"] = f"✅ الإجابة الصح: {poll_data['correct']}"
-        payload["explanation_parse_mode"] = "HTML"
+    if correct_option_id is not None:
+        payload["correct_option_id"] = correct_option_id
 
     try:
         r = requests.post(url, json=payload, timeout=30)
         if r.status_code == 200:
-            log.info(f"📊 Poll sent: {poll_data['question'][:50]}")
+            log.info(f"📊 Quiz sent: {mcq['question'][:50]}")
             return True
-        log.error(f"Poll error: {r.status_code} {r.text[:200]}")
+        log.error(f"Quiz error: {r.status_code} {r.text[:200]}")
         return False
     except Exception as e:
-        log.exception("send_telegram_poll failed")
+        log.exception("send_telegram_quiz failed")
         return False
 
 
-def send_reminder_with_poll(full_text):
-    """يبعت Reminder + Poll"""
-    # 1. نستخرج الـ poll data
-    poll_data = parse_poll_data(full_text)
+def send_reminder_with_quiz(full_text):
+    """يبعت Reminder + Quiz Poll"""
+    # 1. نستخرج الـ MCQ
+    mcq = parse_mcq_from_text(full_text)
 
-    # 2. نشيل قسم POLL من النص
-    clean_text = strip_poll_section(full_text)
+    # 2. نشيل قسم MCQ من النص
+    clean_text = strip_mcq_section(full_text)
 
-    # 3. نبعت النص النضيف أولاً
+    # 3. نبعت النص (بدون MCQ) أولاً
     text_sent = send_telegram(clean_text)
 
-    # 4. نبعت الـ poll (لو فيه)
-    poll_sent = False
-    if poll_data["question"] and len(poll_data["options"]) >= 2:
-        poll_sent = send_telegram_poll(poll_data)
+    # 4. نبعت الـ Quiz (لو فيه)
+    quiz_sent = False
+    if mcq["question"] and len(mcq["options"]) >= 2:
+        quiz_sent = send_telegram_quiz(mcq)
 
-    return text_sent and poll_sent
+    if not text_sent:
+        return False
+    return True  # مفيش مشكلة لو الـ quiz متبعتش
 
 
 # ============ أوامر ============
@@ -527,8 +571,8 @@ def main():
     if command == "now":
         log.info("⚡ Manual /now command")
         reminder = get_nursing_reminder()
-        if send_reminder_with_poll(reminder):
-            log.info("✅ Reminder + Poll sent successfully!")
+        if send_reminder_with_quiz(reminder):
+            log.info("✅ Reminder + Quiz sent successfully!")
         else:
             log.error("❌ Failed to send reminder")
             sys.exit(1)
@@ -548,8 +592,8 @@ def main():
     else:  # auto (الجدولة العادية)
         log.info("⏰ Scheduled reminder")
         reminder = get_nursing_reminder()
-        if send_reminder_with_poll(reminder):
-            log.info("✅ Scheduled reminder + Poll sent!")
+        if send_reminder_with_quiz(reminder):
+            log.info("✅ Scheduled reminder + Quiz sent!")
         else:
             log.error("❌ Failed to send scheduled reminder")
             sys.exit(1)
