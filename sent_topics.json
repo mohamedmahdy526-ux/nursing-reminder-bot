@@ -1,5 +1,6 @@
 [
   "ECG - ST Elevation & MI Recognition",
   "Vital Signs - Blood Pressure Abnormalities",
-  "Surgical - Drain Management"
+  "Surgical - Drain Management",
+  "IV Therapy - IV Flow Rate Calculation"
 ]
