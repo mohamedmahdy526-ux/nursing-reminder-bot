@@ -16,6 +16,16 @@ import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+# ضبط ترميز UTF-8 لدعم الإيموجي والعربية على Windows
+if sys.platform == "win32":
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 # ============ Logging ============
 logging.basicConfig(
     level=logging.INFO,
@@ -25,11 +35,32 @@ logging.basicConfig(
 log = logging.getLogger("nursing-bot")
 
 # ============ إعدادات ============
+# تحميل المتغيرات من ملف .env محلياً إن وجد
+env_path = Path(".env")
+if env_path.exists():
+    for env_line in env_path.read_text(encoding="utf-8").splitlines():
+        env_line = env_line.strip()
+        if env_line and not env_line.startswith("#") and "=" in env_line:
+            k, v = env_line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "minimax/minimax-m3:free").strip()
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free").strip()
 CAIRO_TZ = ZoneInfo("Africa/Cairo")
+
+# قائمة الموديلات البديلة المجانية لتفادي تعطل أي سيرفر فردي
+FALLBACK_MODELS = [
+    OPENROUTER_MODEL,
+    "google/gemma-4-31b-it:free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "minimax/minimax-m3:free",
+    "z-ai/glm-5.2:free",
+]
+MODELS_TO_TRY = list(dict.fromkeys([m for m in FALLBACK_MODELS if m]))
 
 # ============ Persistence ============
 # بنستخدم GitHub Contents API كـ persistent storage (عشان مفيش local state في GitHub Actions)
@@ -37,7 +68,7 @@ CAIRO_TZ = ZoneInfo("Africa/Cairo")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()
 HISTORY_FILE = "sent_topics.json"
-MAX_HISTORY = 50
+MAX_HISTORY = 100
 
 
 def _gh_headers():
@@ -266,7 +297,7 @@ PROMPT_TEMPLATE = """أنت ممرض خبير ومحاضر تمريض مصري. 
 
 # ============ OpenRouter API ============
 def get_nursing_reminder():
-    """يجيب Nursing Reminder من OpenRouter"""
+    """يجيب Nursing Reminder من OpenRouter مع دعم التبديل التلقائي (Fallback) بين الموديلات"""
     if not OPENROUTER_API_KEY:
         log.error("OPENROUTER_API_KEY is missing!")
         return None
@@ -274,52 +305,69 @@ def get_nursing_reminder():
     topic = pick_topic()
     log.info(f"📌 Topic: {topic}")
 
-    try:
-        response = requests.post(
-            url="https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/mohamedmahdy526-ux/nursing-reminder-bot",
-                "X-Title": "Nursing Reminder Bot",
-            },
-            json={
-                "model": OPENROUTER_MODEL,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "أنت ممرض خبير ومحاضر تمريض. تجاوب باللهجة المصرية العامية. مختصر ومباشر. ما تخترعش معلومات. لو مش متأكد، اكتب 'غير متأكد من المصدر'.",
-                    },
-                    {
-                        "role": "user",
-                        "content": PROMPT_TEMPLATE.format(topic=topic),
-                    },
-                ],
-                "max_tokens": 1000,
-                "temperature": 0.8,
-            },
-            timeout=90,
-        )
+    messages = [
+        {
+            "role": "system",
+            "content": "أنت ممرض خبير ومحاضر تمريض. تجاوب باللهجة المصرية العامية. مختصر ومباشر. ما تخترعش معلومات. لو مش متأكد، اكتب 'غير متأكد من المصدر'.",
+        },
+        {
+            "role": "user",
+            "content": PROMPT_TEMPLATE.format(topic=topic),
+        },
+    ]
 
-        if response.status_code != 200:
-            error_msg = response.json().get("error", {}).get("message", "Unknown error")
-            log.error(f"OpenRouter error: {error_msg}")
-            return f"⚠️ OpenRouter Error: {error_msg}"
+    last_error = "Unknown error"
 
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
-        return content
+    for model in MODELS_TO_TRY:
+        try:
+            log.info(f"🤖 Trying model: {model}")
+            response = requests.post(
+                url="https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com/mohamedmahdy526-ux/nursing-reminder-bot",
+                    "X-Title": "Nursing Reminder Bot",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": 1000,
+                    "temperature": 0.8,
+                },
+                timeout=60,
+            )
 
-    except requests.exceptions.Timeout:
-        return "⚠️ Timeout: OpenRouter took too long."
-    except Exception as e:
-        log.exception("Error in get_nursing_reminder")
-        return f"⚠️ Error: {e}"
+            if response.status_code == 200:
+                data = response.json()
+                choices = data.get("choices", [])
+                if choices and "message" in choices[0] and choices[0]["message"].get("content"):
+                    content = choices[0]["message"]["content"]
+                    log.info(f"✅ Model {model} succeeded!")
+                    return content
+
+            try:
+                error_data = response.json().get("error", {})
+                last_error = error_data.get("message", response.text[:200])
+            except Exception:
+                last_error = response.text[:200]
+
+            log.warning(f"⚠️ Model {model} failed ({response.status_code}): {last_error}. Trying next fallback...")
+
+        except requests.exceptions.Timeout:
+            last_error = f"Timeout on {model}"
+            log.warning(f"⏳ Model {model} timed out. Trying next fallback...")
+        except Exception as e:
+            last_error = str(e)
+            log.warning(f"⚠️ Model {model} error: {e}. Trying next fallback...")
+
+    log.error(f"❌ All fallback models failed. Last error: {last_error}")
+    return f"⚠️ تعذر الحصول على تذكير حالياً: {last_error}"
 
 
 # ============ Telegram ============
 def send_telegram(message):
-    """يبعت رسالة على تليجرام (Plain Text)"""
+    """يبعت رسالة على تليجرام مع تقسيم آمن ومعالجة HTML fallback"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         log.error("Telegram credentials missing!")
         return False
@@ -329,43 +377,49 @@ def send_telegram(message):
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
-    # نستخدم HTML formatting للـ Bold والإيموجي
-    if len(message) <= 4096:
+    def _post(chunk, mode):
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": chunk,
+            "disable_web_page_preview": True,
+        }
+        if mode:
+            payload["parse_mode"] = mode
+        return requests.post(url, data=payload, timeout=30)
+
+    # تقسيم آمن عند نهايات الأسطر
+    chunks = []
+    if len(message) <= 3900:
+        chunks = [message]
+    else:
+        current_chunk = []
+        current_len = 0
+        for line in message.split("\n"):
+            line_len = len(line) + 1
+            if current_len + line_len > 3700:
+                chunks.append("\n".join(current_chunk))
+                current_chunk = [line]
+                current_len = line_len
+            else:
+                current_chunk.append(line)
+                current_len += line_len
+        if current_chunk:
+            chunks.append("\n".join(current_chunk))
+
+    success = True
+    for chunk in chunks:
         try:
-            r = requests.post(
-                url,
-                data={
-                    "chat_id": TELEGRAM_CHAT_ID,
-                    "text": message,
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": True,
-                },
-                timeout=30,
-            )
-            if r.status_code == 200:
-                return True
-            log.error(f"Telegram error: {r.text}")
-            return False
+            r = _post(chunk, "HTML")
+            if r.status_code != 200:
+                log.warning(f"Telegram HTML send failed ({r.status_code}): {r.text[:120]}. Retrying plain text...")
+                r_fallback = _post(chunk, "")
+                if r_fallback.status_code != 200:
+                    log.error(f"Telegram plain fallback failed: {r_fallback.text[:150]}")
+                    success = False
         except Exception as e:
             log.exception("Telegram send failed")
-            return False
-    else:
-        parts = [message[i:i+4000] for i in range(0, len(message), 4000)]
-        for part in parts:
-            try:
-                requests.post(
-                    url,
-                    data={
-                        "chat_id": TELEGRAM_CHAT_ID,
-                        "text": part,
-                        "parse_mode": "HTML",
-                    },
-                    timeout=30,
-                )
-            except Exception as e:
-                log.exception("Telegram part send failed")
-                return False
-        return True
+            success = False
+    return success
 
 
 def escape_html(text):
@@ -448,43 +502,37 @@ def parse_mcq_from_text(text):
                 continue
 
             # استخراج الاختيارات
-            if in_mcq and len(line_stripped) >= 2:
-                # أ) أو أ- أو أ.
-                if line_stripped[0] in "أابججد" and line_stripped[1] in ")].-":
-                    letter = line_stripped[0]
-                    # أ/ب/ج/د -> A/B/C/D
-                    if letter == "أ":
-                        letter = "A"
-                    elif letter == "ب":
-                        letter = "B"
-                    elif letter == "ج":
-                        letter = "C"
-                    elif letter == "د":
-                        letter = "D"
-                    option_text = line_stripped[2:].strip()
-                    mcq["options"].append((letter, option_text))
-                    continue
+            if in_mcq:
+                clean_line = line_stripped.lstrip("([{-")
+                if len(clean_line) >= 2:
+                    first_char = clean_line[0]
+                    second_char = clean_line[1]
+                    letter_map = {
+                        "أ": "A", "ا": "A", "إ": "A", "آ": "A",
+                        "ب": "B",
+                        "ج": "C",
+                        "د": "D",
+                        "A": "A", "B": "B", "C": "C", "D": "D",
+                    }
+                    if first_char in letter_map and second_char in ")].- :":
+                        letter = letter_map[first_char]
+                        option_text = clean_line[2:].strip().lstrip(")-. :")
+                        mcq["options"].append((letter, option_text))
+                        continue
 
             # استخراج الإجابة
             if line_stripped.startswith("الإجابة:"):
-                answer_text = line_stripped.replace("الإجابة:", "").strip()
-                # نمسك أول حرف عربي أو إنجليزي
-                # ممكن يكون: "ب" أو "B" أو "(ب)" أو "ب -" أو "الخيار ب"
-                answer_text_upper = answer_text.upper()
-                
-                # البحث عن أول حرف من الحروف
-                for ch in answer_text_upper:
-                    if ch in "ABCDأبجد":
-                        if ch == "أ":
-                            mcq["correct_letter"] = "A"
-                        elif ch == "ب":
-                            mcq["correct_letter"] = "B"
-                        elif ch == "ج":
-                            mcq["correct_letter"] = "C"
-                        elif ch == "د":
-                            mcq["correct_letter"] = "D"
-                        else:
-                            mcq["correct_letter"] = ch
+                answer_text = line_stripped.replace("الإجابة:", "").strip().upper()
+                letter_map = {
+                    "أ": "A", "ا": "A", "إ": "A", "آ": "A",
+                    "ب": "B",
+                    "ج": "C",
+                    "د": "D",
+                    "A": "A", "B": "B", "C": "C", "D": "D",
+                }
+                for ch in answer_text:
+                    if ch in letter_map:
+                        mcq["correct_letter"] = letter_map[ch]
                         break
                 continue
 
