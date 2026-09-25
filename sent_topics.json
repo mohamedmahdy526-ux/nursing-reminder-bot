@@ -1,5 +1,4 @@
 [
-  "Vital Signs - Blood Pressure Abnormalities",
   "Surgical - Drain Management",
   "IV Therapy - IV Flow Rate Calculation",
   "Pharmacology - Insulin Types & Onset",
@@ -98,5 +97,6 @@
   "IV Therapy - Infiltration vs Extravasation",
   "Pharmacology - Digoxin Toxicity",
   "Neonatal Nursing (NICU) - Neonatal Sepsis",
-  "Pediatric - Vital Signs by Age"
+  "Pediatric - Vital Signs by Age",
+  "ECG - ST Elevation & MI Recognition"
 ]
