@@ -1,5 +1,4 @@
 [
-  "Surgical - Drain Management",
   "IV Therapy - IV Flow Rate Calculation",
   "Pharmacology - Insulin Types & Onset",
   "Ethics - Patient Confidentiality",
@@ -98,5 +97,6 @@
   "Pharmacology - Digoxin Toxicity",
   "Neonatal Nursing (NICU) - Neonatal Sepsis",
   "Pediatric - Vital Signs by Age",
-  "ECG - ST Elevation & MI Recognition"
+  "ECG - ST Elevation & MI Recognition",
+  "Vital Signs - Blood Pressure Abnormalities"
 ]
