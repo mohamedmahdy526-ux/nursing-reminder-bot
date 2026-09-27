@@ -1,5 +1,4 @@
 [
-  "Respiratory - Asthma Exacerbation",
   "Emergency - Anaphylaxis Management",
   "Ethics - Informed Consent",
   "Emergency - Triage Systems (ESI)",
@@ -98,5 +97,6 @@
   "Maternal - Preeclampsia",
   "Pharmacology - Insulin Types & Onset",
   "Ethics - Patient Confidentiality",
-  "Intensive Care - Mechanical Ventilation Basics"
+  "Intensive Care - Mechanical Ventilation Basics",
+  "Intensive Care - Hemodynamic Monitoring"
 ]
