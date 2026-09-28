@@ -1,5 +1,4 @@
 [
-  "Emergency - Triage Systems (ESI)",
   "Intensive Care - Sepsis Bundle (Hour-1)",
   "Pediatric - Dehydration Assessment",
   "Cardiac - CPR & ACLS Algorithms",
@@ -98,5 +97,6 @@
   "Intensive Care - Mechanical Ventilation Basics",
   "Intensive Care - Hemodynamic Monitoring",
   "Surgical - Post-Op Complications",
-  "Ethics - Patient Confidentiality"
+  "Ethics - Patient Confidentiality",
+  "Ethics - Informed Consent"
 ]
