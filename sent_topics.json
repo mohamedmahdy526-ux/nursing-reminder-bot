@@ -1,5 +1,4 @@
 [
-  "Pain - Pain Assessment Scales (NRS, VAS, FLACC)",
   "Communication - ISBAR Handover",
   "Cardiac - Arrhythmias Recognition",
   "Pediatric - Febrile Seizure",
@@ -98,5 +97,6 @@
   "Patient Safety - SBAR Communication",
   "Vital Signs - Oxygen Saturation & Hypoxia",
   "Intensive Care - Shock Types & Management",
-  "Neonatal Nursing (NICU) - Apgar Score"
+  "Neonatal Nursing (NICU) - Apgar Score",
+  "IV Therapy - Peripheral IV Insertion"
 ]
