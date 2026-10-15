@@ -1,5 +1,4 @@
 [
-  "Pediatric - Febrile Seizure",
   "Wound - Surgical Site Infection",
   "Intensive Care - Acid-Base Balance",
   "Blood - Type & Crossmatch",
@@ -98,5 +97,6 @@
   "Neonatal Nursing (NICU) - Apgar Score",
   "IV Therapy - Peripheral IV Insertion",
   "Pain - Pain Assessment Scales (NRS, VAS, FLACC)",
-  "Communication - ISBAR Handover"
+  "Communication - ISBAR Handover",
+  "Cardiac - Arrhythmias Recognition"
 ]
