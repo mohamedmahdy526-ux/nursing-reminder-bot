@@ -1,5 +1,4 @@
 [
-  "Blood - Type & Crossmatch",
   "Oncology - Neutropenic Precautions",
   "Fluid & Electrolytes - Hyponatremia",
   "Pharmacology - Digoxin Toxicity",
@@ -98,5 +97,6 @@
   "Communication - ISBAR Handover",
   "Cardiac - Arrhythmias Recognition",
   "Pediatric - Febrile Seizure",
-  "Pain - Pain Assessment Scales (NRS, VAS, FLACC)"
+  "Pain - Pain Assessment Scales (NRS, VAS, FLACC)",
+  "Intensive Care - Acid-Base Balance"
 ]
