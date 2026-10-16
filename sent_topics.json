@@ -1,5 +1,4 @@
 [
-  "Oncology - Neutropenic Precautions",
   "Fluid & Electrolytes - Hyponatremia",
   "Pharmacology - Digoxin Toxicity",
   "Maternal - Preeclampsia",
@@ -98,5 +97,6 @@
   "Cardiac - Arrhythmias Recognition",
   "Pediatric - Febrile Seizure",
   "Pain - Pain Assessment Scales (NRS, VAS, FLACC)",
-  "Intensive Care - Acid-Base Balance"
+  "Intensive Care - Acid-Base Balance",
+  "Blood - Type & Crossmatch"
 ]
