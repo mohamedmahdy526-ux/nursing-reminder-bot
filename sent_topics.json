@@ -1,5 +1,4 @@
 [
-  "Surgical - Wound Care & Healing",
   "Infection Control - PPE Donning & Doffing",
   "Infection Control - CAUTI Prevention",
   "Infection Control - Hand Hygiene (5 Moments)",
@@ -98,5 +97,6 @@
   "Fluid & Electrolytes - Hyponatremia",
   "ECG - ST Elevation & MI Recognition",
   "Maternal - Postpartum Hemorrhage",
-  "Oncology - Chemotherapy Side Effects"
+  "Oncology - Chemotherapy Side Effects",
+  "Pharmacology - Heparin & INR Monitoring"
 ]
