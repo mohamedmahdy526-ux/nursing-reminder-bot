@@ -1,5 +1,4 @@
 [
-  "Diabetes - DKA Management",
   "Ventilator - Modes (AC, SIMV, PSV)",
   "Maternal - Postpartum Hemorrhage",
   "Ventilator - Weaning Criteria",
@@ -98,5 +97,6 @@
   "Neonatal Nursing (NICU) - Respiratory Distress Syndrome",
   "Renal - Acute Kidney Injury",
   "Infection Control - VAP Prevention",
-  "Wound - Pressure Injury Stages"
+  "Wound - Pressure Injury Stages",
+  "Fluid & Electrolytes - Hyperkalemia"
 ]
