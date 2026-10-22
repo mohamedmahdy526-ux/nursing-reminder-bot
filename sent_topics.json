@@ -1,5 +1,4 @@
 [
-  "Blood - Transfusion Reactions",
   "Infection Control - VAP Prevention",
   "Emergency - Anaphylaxis Management",
   "Ventilator - Weaning Criteria",
@@ -98,5 +97,6 @@
   "Ventilator - Modes (AC, SIMV, PSV)",
   "Fluid & Electrolytes - Hyperkalemia",
   "Intensive Care - Shock Types & Management",
-  "ECG - Atrial Fibrillation"
+  "ECG - Atrial Fibrillation",
+  "Intensive Care - Vasopressors & Inotropes"
 ]
