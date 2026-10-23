@@ -1,5 +1,4 @@
 [
-  "Ventilator - Weaning Criteria",
   "Wound - Surgical Site Infection",
   "Neonatal Nursing (NICU) - Phototherapy for Jaundice",
   "Diabetes - Hypoglycemia Treatment",
@@ -98,5 +97,6 @@
   "ECG - Atrial Fibrillation",
   "Intensive Care - Vasopressors & Inotropes",
   "Pediatric - Febrile Seizure",
-  "ECG - ST Elevation & MI Recognition"
+  "ECG - ST Elevation & MI Recognition",
+  "Emergency - Anaphylaxis Management"
 ]
