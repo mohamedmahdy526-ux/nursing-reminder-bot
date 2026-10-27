@@ -1,5 +1,4 @@
 [
-  "Emergency - Stroke Recognition (FAST)",
   "Stroke - Ischemic vs Hemorrhagic",
   "Respiratory - Asthma Exacerbation",
   "Blood - Transfusion Reactions",
@@ -98,5 +97,6 @@
   "Emergency - Trauma Assessment (ABCDE)",
   "IV Therapy - Peripheral IV Insertion",
   "Cardiac - CPR & ACLS Algorithms",
-  "Intensive Care - Acid-Base Balance"
+  "Intensive Care - Acid-Base Balance",
+  "Cardiac - 12-Lead ECG Basics"
 ]
