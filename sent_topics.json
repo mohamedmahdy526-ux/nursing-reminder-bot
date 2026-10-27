@@ -1,5 +1,4 @@
 [
-  "Respiratory - Asthma Exacerbation",
   "Blood - Transfusion Reactions",
   "IV Therapy - Infiltration vs Extravasation",
   "Pharmacology - Digoxin Toxicity",
@@ -98,5 +97,6 @@
   "Cardiac - CPR & ACLS Algorithms",
   "Intensive Care - Acid-Base Balance",
   "Cardiac - 12-Lead ECG Basics",
-  "Pharmacology - Insulin Types & Onset"
+  "Pharmacology - Insulin Types & Onset",
+  "Stroke - Ischemic vs Hemorrhagic"
 ]
