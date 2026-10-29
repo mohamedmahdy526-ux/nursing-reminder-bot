@@ -1,5 +1,4 @@
 [
-  "Pediatric - Vital Signs by Age",
   "ECG - ST Elevation & MI Recognition",
   "Vital Signs - Blood Pressure Abnormalities",
   "Surgical - Drain Management",
@@ -98,5 +97,6 @@
   "Ethics - Informed Consent",
   "Blood - Transfusion Reactions",
   "IV Therapy - Infiltration vs Extravasation",
-  "Pharmacology - Digoxin Toxicity"
+  "Pharmacology - Digoxin Toxicity",
+  "Neonatal Nursing (NICU) - Neonatal Sepsis"
 ]
