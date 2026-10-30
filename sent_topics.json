@@ -1,5 +1,4 @@
 [
-  "ECG - ST Elevation & MI Recognition",
   "Vital Signs - Blood Pressure Abnormalities",
   "Surgical - Drain Management",
   "Maternal - Preeclampsia",
@@ -98,5 +97,6 @@
   "Blood - Transfusion Reactions",
   "IV Therapy - Infiltration vs Extravasation",
   "Pharmacology - Digoxin Toxicity",
-  "Neonatal Nursing (NICU) - Neonatal Sepsis"
+  "Neonatal Nursing (NICU) - Neonatal Sepsis",
+  "Pediatric - Vital Signs by Age"
 ]
