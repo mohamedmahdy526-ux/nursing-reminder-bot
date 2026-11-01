@@ -1,5 +1,4 @@
 [
-  "Intensive Care - Hemodynamic Monitoring",
   "Surgical - Post-Op Complications",
   "Ethics - Patient Confidentiality",
   "Ethics - Informed Consent",
@@ -98,5 +97,6 @@
   "Surgical - Drain Management",
   "Pediatric - Vital Signs by Age",
   "Infection Control - PPE Donning & Doffing",
-  "Diabetes - Hypoglycemia Treatment"
+  "Diabetes - Hypoglycemia Treatment",
+  "Intensive Care - Mechanical Ventilation Basics"
 ]
