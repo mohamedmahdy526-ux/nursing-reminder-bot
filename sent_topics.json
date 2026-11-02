@@ -1,5 +1,4 @@
 [
-  "Ethics - Patient Confidentiality",
   "Ethics - Informed Consent",
   "Emergency - Triage Systems (ESI)",
   "Intensive Care - Sepsis Bundle (Hour-1)",
@@ -98,5 +97,6 @@
   "Infection Control - PPE Donning & Doffing",
   "Diabetes - Hypoglycemia Treatment",
   "Intensive Care - Mechanical Ventilation Basics",
-  "Intensive Care - Hemodynamic Monitoring"
+  "Intensive Care - Hemodynamic Monitoring",
+  "Surgical - Post-Op Complications"
 ]
