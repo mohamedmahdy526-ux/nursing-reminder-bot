@@ -1,5 +1,4 @@
 [
-  "Surgical - Post-Op Complications",
   "Ethics - Patient Confidentiality",
   "Ethics - Informed Consent",
   "Emergency - Triage Systems (ESI)",
@@ -98,5 +97,6 @@
   "Pediatric - Vital Signs by Age",
   "Infection Control - PPE Donning & Doffing",
   "Diabetes - Hypoglycemia Treatment",
-  "Intensive Care - Mechanical Ventilation Basics"
+  "Intensive Care - Mechanical Ventilation Basics",
+  "Intensive Care - Hemodynamic Monitoring"
 ]
