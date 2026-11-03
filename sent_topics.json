@@ -1,5 +1,4 @@
 [
-  "Ethics - Informed Consent",
   "Emergency - Triage Systems (ESI)",
   "Intensive Care - Sepsis Bundle (Hour-1)",
   "Pediatric - Dehydration Assessment",
@@ -98,5 +97,6 @@
   "Diabetes - Hypoglycemia Treatment",
   "Intensive Care - Mechanical Ventilation Basics",
   "Intensive Care - Hemodynamic Monitoring",
-  "Surgical - Post-Op Complications"
+  "Surgical - Post-Op Complications",
+  "Ethics - Patient Confidentiality"
 ]
