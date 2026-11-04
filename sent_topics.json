@@ -1,5 +1,4 @@
 [
-  "Intensive Care - Sepsis Bundle (Hour-1)",
   "Pediatric - Dehydration Assessment",
   "Pain - Non-pharmacological Management",
   "Patient Safety - Patient Identification",
@@ -98,5 +97,6 @@
   "Intensive Care - Hemodynamic Monitoring",
   "Surgical - Post-Op Complications",
   "Ethics - Patient Confidentiality",
-  "Emergency - Anaphylaxis Management"
+  "Emergency - Anaphylaxis Management",
+  "Emergency - Triage Systems (ESI)"
 ]
