@@ -1,5 +1,4 @@
 [
-  "Patient Safety - Patient Identification",
   "Neonatal Nursing (NICU) - Kangaroo Care",
   "Respiratory - COPD Management",
   "Respiratory - COPD Management",
@@ -98,5 +97,6 @@
   "Emergency - Anaphylaxis Management",
   "Emergency - Triage Systems (ESI)",
   "Intensive Care - Sepsis Bundle (Hour-1)",
-  "Pediatric - Dehydration Assessment"
+  "Pediatric - Dehydration Assessment",
+  "Pain - Non-pharmacological Management"
 ]
