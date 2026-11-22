@@ -1,5 +1,4 @@
 [
-  "Cardiac - Arrhythmias Recognition",
   "Pediatric - Febrile Seizure",
   "Pain - Pain Assessment Scales (NRS, VAS, FLACC)",
   "Intensive Care - Acid-Base Balance",
@@ -98,5 +97,6 @@
   "Pediatric - Vital Signs by Age",
   "Neonatal Nursing (NICU) - Apgar Score",
   "Ventilator - Modes (AC, SIMV, PSV)",
-  "Patient Safety - Fall Prevention"
+  "Patient Safety - Fall Prevention",
+  "Communication - ISBAR Handover"
 ]
