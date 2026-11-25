@@ -1,5 +1,4 @@
 [
-  "Oncology - Neutropenic Precautions",
   "Fluid & Electrolytes - Hyponatremia",
   "ECG - ST Elevation & MI Recognition",
   "Maternal - Postpartum Hemorrhage",
@@ -98,5 +97,6 @@
   "Cardiac - Arrhythmias Recognition",
   "Pediatric - Growth & Development Milestones",
   "Pain - Pain Assessment Scales (NRS, VAS, FLACC)",
-  "Infection Control - PPE Donning & Doffing"
+  "Infection Control - PPE Donning & Doffing",
+  "Blood - Type & Crossmatch"
 ]
