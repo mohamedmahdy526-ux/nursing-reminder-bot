@@ -1,5 +1,4 @@
 [
-  "Fluid & Electrolytes - Hyponatremia",
   "ECG - ST Elevation & MI Recognition",
   "Maternal - Postpartum Hemorrhage",
   "Oncology - Chemotherapy Side Effects",
@@ -98,5 +97,6 @@
   "Pediatric - Growth & Development Milestones",
   "Pain - Pain Assessment Scales (NRS, VAS, FLACC)",
   "Infection Control - PPE Donning & Doffing",
-  "Blood - Type & Crossmatch"
+  "Blood - Type & Crossmatch",
+  "Oncology - Neutropenic Precautions"
 ]
